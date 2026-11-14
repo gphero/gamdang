@@ -789,24 +789,23 @@ function NumIn({ value, onChange, suffix, step = 1, min, comma }) {
       value === "" || value === null || value === undefined || Number.isNaN(Number(value))
         ? ""
         : Number(value).toLocaleString("ko-KR");
+    /* 금액은 오른쪽 정렬이라 칸 왼쪽이 빕니다.
+       거기에 읽기 쉬운 한글 표기를 넣어 줄 하나를 아낍니다. */
     return (
-      <span className="numfield">
-        <span className="numwrap">
-          <input
-            className="in mono"
-            type="text"
-            inputMode="numeric"
-            value={shown}
-            onChange={(e) => {
-              const neg = e.target.value.trim().startsWith("-");
-              const digits = e.target.value.replace(/[^0-9]/g, "");
-              if (digits === "") { onChange(0); return; }
-              onChange(Number(digits) * (neg ? -1 : 1));
-            }}
-          />
-          {suffix ? <em>{suffix}</em> : null}
-        </span>
-        <em className="krhint">{readable(value)}</em>
+      <span className="numwrap boxed">
+        <em className="krin">{readable(value)}</em>
+        <input
+          className="mono"
+          type="text"
+          inputMode="numeric"
+          value={shown}
+          onChange={(e) => {
+            const neg = e.target.value.trim().startsWith("-");
+            const digits = e.target.value.replace(/[^0-9]/g, "");
+            if (digits === "") { onChange(0); return; }
+            onChange(Number(digits) * (neg ? -1 : 1));
+          }}
+        />
       </span>
     );
   }
@@ -1469,10 +1468,10 @@ function Wizard({ plan, setPlan, onClose }) {
               <NumIn value={d.cash} step={1000000} onChange={(v) => set({ cash: num(v) })} suffix="원" comma />
             </Field>
             <Field label="빌릴 금액" hint="자동 계산">
-              <div className="numfield">
-                <div className="in readonly mono">{won(loanAmt)}</div>
-                <em className="krhint">{readable(loanAmt)}</em>
-              </div>
+              <span className="numwrap boxed readonly">
+                <em className="krin">{readable(loanAmt)}</em>
+                <span className="mono roval">{won(loanAmt)}</span>
+              </span>
             </Field>
             {loanAmt > 0 && (
               <>
@@ -2252,10 +2251,10 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
         </Field>
         {hasLines ? (
           <Field label="총 금액" hint="아래 구성 항목의 합계">
-            <div className="numfield">
-              <div className="in readonly mono">{won(be.amount)}</div>
-              <em className="krhint">{readable(be.amount)}</em>
-            </div>
+            <span className="numwrap boxed readonly">
+              <em className="krin">{readable(be.amount)}</em>
+              <span className="mono roval">{won(be.amount)}</span>
+            </span>
           </Field>
         ) : (
           <Field label="총 금액">
@@ -2905,12 +2904,12 @@ function Style() {
 .card-h h2{font-size:16px;font-weight:600;letter-spacing:-.01em;margin:2px 0 0}
 .note{font-size:12.5px;color:var(--ink3);margin:-6px 0 14px}
 
-.settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;
+.settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:12px;
   background:var(--card);border:1px solid var(--line);border-radius:4px;padding:14px 16px;margin-bottom:14px}
 
-.fld{display:flex;flex-direction:column;gap:4px;min-width:0}
-/* 설명이 한 줄이든 두 줄이든 입력란 윗선이 맞도록 라벨 높이를 확보합니다 */
-.grid>.fld>.fld-l,.settings>.fld>.fld-l{min-height:3.1em;align-content:start}
+.fld{display:flex;flex-direction:column;gap:3px;min-width:0}
+/* 설명 줄 수가 달라도 입력란이 한 줄에 맞도록 아래쪽으로 정렬합니다 */
+.grid,.settings{align-items:end}
 .fld.wide{grid-column:1/-1}
 .fld-l{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;
   font-size:11.5px;color:var(--ink2);font-weight:500;line-height:1.35}
@@ -2918,12 +2917,24 @@ function Style() {
   font-family:'IBM Plex Sans KR',system-ui,sans-serif}
 .in{width:100%;border:1px solid var(--line);background:#fff;border-radius:3px;padding:7px 9px;font:inherit;font-size:13.5px;color:var(--ink)}
 .in:focus{border-color:var(--deep)}
-.numfield{display:block;width:100%}
-.krhint{display:block;font-style:normal;font-size:11px;color:var(--ink3);
-  margin-top:3px;text-align:right;line-height:1.3;word-break:keep-all}
 .numwrap{position:relative;display:flex;align-items:center}
-.numwrap em{position:absolute;right:9px;font-style:normal;font-size:11px;color:var(--ink3);pointer-events:none;font-family:'IBM Plex Mono','IBM Plex Sans KR',monospace}
-.numwrap .in{padding-right:34px;text-align:right}
+
+/* 금액 칸: 테두리를 감싸는 쪽이 맡고 입력은 투명하게 */
+.numwrap.boxed{width:100%;gap:6px;border:1px solid var(--line);background:#fff;
+  border-radius:3px;padding:0 9px}
+.numwrap.boxed:focus-within{border-color:var(--deep)}
+.numwrap.boxed .krin{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-style:normal;font-size:10.5px;color:var(--ink3)}
+.numwrap.boxed input{flex:0 0 8.4em;min-width:8.4em;border:0;background:none;outline:none;
+  padding:7px 0;font:inherit;font-size:13.5px;text-align:right;color:var(--ink);
+  font-family:'IBM Plex Mono','IBM Plex Sans KR',monospace;font-variant-numeric:tabular-nums}
+.numwrap.boxed.readonly{background:#F4F7F7}
+.numwrap.boxed .roval{flex:0 0 8.4em;min-width:8.4em;text-align:right;padding:7px 0;
+  font-size:13.5px;color:var(--ink2)}
+/* 구성 항목 줄은 좁고 오른쪽에 계산값이 따로 있어 생략합니다 */
+.lrow .numwrap.boxed .krin{display:none}
+.numwrap:not(.boxed) em{position:absolute;right:9px;font-style:normal;font-size:11px;color:var(--ink3);pointer-events:none;font-family:'IBM Plex Mono','IBM Plex Sans KR',monospace}
+.numwrap:not(.boxed) .in{padding-right:34px;text-align:right}
 
 .btn{border:1px solid var(--line);background:#fff;border-radius:3px;padding:7px 13px;font:inherit;font-size:13px;cursor:pointer;color:var(--ink)}
 .btn:hover{border-color:var(--ink3)}
@@ -3049,7 +3060,7 @@ function Style() {
 .modal-h h3{margin:0;font-size:15px;font-weight:600}
 .modal-b{padding:18px}
 .modal-f{display:flex;justify-content:flex-end;gap:8px;padding:13px 18px;border-top:1px solid var(--line);background:#FAFCFB}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(205px,1fr));gap:13px}
 .grid.tight{gap:9px;margin-top:8px}
 
 .calcbox{margin-top:16px;background:#F4F7F7;border:1px solid var(--line2);border-radius:4px;padding:12px 14px}
@@ -3070,7 +3081,7 @@ function Style() {
 .wsteps li.done b{background:var(--pos)}
 .wsteps li.done{color:var(--ink2)}
 
-.wrow{display:grid;grid-template-columns:1fr 150px auto;gap:8px;align-items:center}
+.wrow{display:grid;grid-template-columns:1fr 200px auto;gap:8px;align-items:center}
 .wlabel{font-size:13.5px}
 .wtip{margin-top:14px;background:var(--okbg);border:1px solid #BFD6CC;border-radius:4px;
   padding:11px 14px;font-size:12.5px;color:var(--ink2);line-height:1.5}
@@ -3090,7 +3101,7 @@ function Style() {
 .fix p.mut{font-size:12px}
 
 @media (max-width:640px){
-  .wrow{grid-template-columns:1fr 120px}
+  .wrow{grid-template-columns:1fr 150px}
   .wsteps li{font-size:11px;padding:4px 8px}
 }
 
@@ -3098,7 +3109,7 @@ function Style() {
 .tplpick .note{margin:0 0 10px}
 
 .lines{display:flex;flex-direction:column;gap:6px}
-.lrow{display:grid;grid-template-columns:1fr 78px 118px 96px auto;gap:6px;align-items:center;
+.lrow{display:grid;grid-template-columns:1fr 78px 132px 96px auto;gap:6px;align-items:center;
   padding:6px 8px;border:1px solid var(--line2);border-radius:4px;background:#fff}
 .lrow.isbase{border-color:#BFD6CC;background:#FAFCFB}
 .lrow .in{padding:6px 8px;font-size:13px}
