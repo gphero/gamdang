@@ -774,9 +774,11 @@ function prescribe(plan, sc) {
 function Field({ label, hint, children, wide }) {
   return (
     <label className={`fld${wide ? " wide" : ""}`}>
-      <span className="fld-l">{label}</span>
+      <span className="fld-l">
+        {label}
+        {hint ? <em className="fld-h">{hint}</em> : null}
+      </span>
       {children}
-      {hint ? <span className="fld-h">{hint}</span> : null}
     </label>
   );
 }
@@ -2907,9 +2909,13 @@ function Style() {
   background:var(--card);border:1px solid var(--line);border-radius:4px;padding:14px 16px;margin-bottom:14px}
 
 .fld{display:flex;flex-direction:column;gap:4px;min-width:0}
+/* 설명이 한 줄이든 두 줄이든 입력란 윗선이 맞도록 라벨 높이를 확보합니다 */
+.grid>.fld>.fld-l,.settings>.fld>.fld-l{min-height:3.1em;align-content:start}
 .fld.wide{grid-column:1/-1}
-.fld-l{font-size:11.5px;color:var(--ink2);font-weight:500}
-.fld-h{font-size:11px;color:var(--ink3);font-family:'IBM Plex Mono','IBM Plex Sans KR',monospace}
+.fld-l{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;
+  font-size:11.5px;color:var(--ink2);font-weight:500;line-height:1.35}
+.fld-h{font-style:normal;font-size:10.5px;font-weight:400;color:var(--ink3);
+  font-family:'IBM Plex Sans KR',system-ui,sans-serif}
 .in{width:100%;border:1px solid var(--line);background:#fff;border-radius:3px;padding:7px 9px;font:inherit;font-size:13.5px;color:var(--ink)}
 .in:focus{border-color:var(--deep)}
 .numfield{display:block;width:100%}
