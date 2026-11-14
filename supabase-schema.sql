@@ -97,6 +97,29 @@ create policy products_write on public.products
   for all to authenticated using (true) with check (true);
 
 -- ─────────────────────────────────────────────
+-- 본인 계정 삭제
+--   앱의 '계정 삭제' 버튼이 이 함수를 호출합니다.
+--   auth.users 에서 지워지면 plans·snapshots 도 on delete cascade 로 함께 사라집니다.
+--   security definer 이므로 search_path 를 고정해 두었습니다.
+-- ─────────────────────────────────────────────
+create or replace function public.delete_my_account()
+returns void
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다';
+  end if;
+  delete from auth.users where id = auth.uid();
+end;
+$$;
+
+revoke all on function public.delete_my_account() from public, anon;
+grant execute on function public.delete_my_account() to authenticated;
+
+-- ─────────────────────────────────────────────
 -- 참고: 지금은 로그인한 사용자면 누구나 공용 마스터를 수정할 수 있습니다.
 -- 위키처럼 열어두는 구조입니다. 나중에 관리자만 수정하게 바꾸려면
 -- 아래처럼 역할 테이블을 두고 write 정책의 조건을 교체하세요.

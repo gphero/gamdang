@@ -4,6 +4,9 @@ import {
   ResponsiveContainer, ReferenceLine, Legend,
 } from "recharts";
 import { storage } from "./storage.js";
+import { SUPABASE_URL, SUPABASE_KEY, HOSTED, SERVICE } from "./config.js";
+import { AboutPage, GuideIndex, GuidePage, LegalPage } from "./Pages.jsx";
+import { GUIDES } from "./content.js";
 
 /* ------------------------------------------------------------------
    감당할수있겠나! — 큰 지출을 감당할 수 있는지 미리 굴려보는 가계 현금흐름 예측 시스템
@@ -94,6 +97,24 @@ drop policy if exists products_read on public.products;
 create policy products_read on public.products for select to anon, authenticated using (true);
 drop policy if exists products_write on public.products;
 create policy products_write on public.products for all to authenticated using (true) with check (true);
+
+-- 본인 계정 삭제. auth.users 에서 지워지면 plans·snapshots 도 함께 사라집니다.
+create or replace function public.delete_my_account()
+returns void
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다';
+  end if;
+  delete from auth.users where id = auth.uid();
+end;
+$$;
+
+revoke all on function public.delete_my_account() from public, anon;
+grant execute on function public.delete_my_account() to authenticated;
 `;
 
 const trimUrl = (u) => String(u || "").trim().replace(/\/+$/, "");
@@ -125,6 +146,35 @@ async function sbFetch(conn, path, opts = {}) {
 
 const sbSignUp = (conn, email, password) =>
   sbFetch(conn, "/auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password }) });
+
+/* 비밀번호 재설정 메일 보내기 */
+const sbRecover = (conn, email) =>
+  sbFetch(conn, "/auth/v1/recover", {
+    method: "POST",
+    body: JSON.stringify({ email, redirect_to: `${SERVICE.url}/` }),
+  });
+
+/* 로그인한 사용자의 비밀번호 바꾸기 */
+const sbUpdatePassword = (conn, password) =>
+  sbFetch(conn, "/auth/v1/user", { method: "PUT", body: JSON.stringify({ password }) });
+
+/* 서버에 올라간 내 데이터만 지우기 (계정은 유지) */
+async function remoteWipeData(conn) {
+  const uid = conn.user.id;
+  await sbFetch(conn, `/rest/v1/snapshots?user_id=eq.${uid}`, {
+    method: "DELETE", headers: { Prefer: "return=minimal" },
+  });
+  await sbFetch(conn, `/rest/v1/plans?user_id=eq.${uid}`, {
+    method: "DELETE", headers: { Prefer: "return=minimal" },
+  });
+}
+
+/* 계정까지 지우기. 스키마의 delete_my_account() 를 호출합니다.
+   auth.users 에서 지워지면 plans·snapshots 도 on delete cascade 로 함께 사라집니다. */
+const remoteDeleteAccount = (conn) =>
+  sbFetch(conn, "/rest/v1/rpc/delete_my_account", {
+    method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({}),
+  });
 
 const sbSignIn = (conn, email, password) =>
   sbFetch(conn, "/auth/v1/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) });
@@ -907,11 +957,90 @@ function LevelStrip({ result, floor, unit }) {
 }
 
 /* ---------------- 메인 ---------------- */
-export default function Cashflow() {
+/* ------------------------------------------------------------------
+   아주 작은 라우터
+   계산기는 /, 읽을거리와 약관은 각자의 주소를 가집니다.
+   Netlify 의 _redirects 가 모든 경로를 index.html 로 보내 줍니다.
+------------------------------------------------------------------- */
+const TITLES = {
+  "/": `${SERVICE.name} — ${SERVICE.tagline}`,
+  "/about": `소개 · ${SERVICE.name}`,
+  "/guide": `가이드 · ${SERVICE.name}`,
+  "/privacy": `개인정보처리방침 · ${SERVICE.name}`,
+  "/terms": `이용약관 · ${SERVICE.name}`,
+};
+
+function useRoute() {
+  const [path, setPath] = useState(() => window.location.pathname || "/");
+
+  useEffect(() => {
+    const onPop = () => setPath(window.location.pathname || "/");
+    window.addEventListener("popstate", onPop);
+
+    /* 같은 사이트 안의 링크는 새로고침 없이 이동합니다 */
+    const onClick = (e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = e.target.closest && e.target.closest("a[href]");
+      if (!a) return;
+      const href = a.getAttribute("href");
+      if (!href || !href.startsWith("/") || a.target === "_blank") return;
+      e.preventDefault();
+      if (href !== window.location.pathname) window.history.pushState({}, "", href);
+      setPath(href);
+      window.scrollTo(0, 0);
+    };
+    document.addEventListener("click", onClick);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      document.removeEventListener("click", onClick);
+    };
+  }, []);
+
+  useEffect(() => {
+    const guide = path.startsWith("/guide/") ? GUIDES.find((g) => g.slug === path.slice(7)) : null;
+    const title = guide ? `${guide.title} · ${SERVICE.name}` : (TITLES[path] || SERVICE.name);
+    document.title = title;
+    const desc = guide ? guide.summary : SERVICE.tagline;
+    let tag = document.querySelector('meta[name="description"]');
+    if (!tag) {
+      tag = document.createElement("meta");
+      tag.setAttribute("name", "description");
+      document.head.appendChild(tag);
+    }
+    tag.setAttribute("content", desc);
+  }, [path]);
+
+  const go = (to) => (e) => {
+    if (e) e.preventDefault();
+    window.history.pushState({}, "", to);
+    setPath(to);
+    window.scrollTo(0, 0);
+  };
+
+  return [path, go];
+}
+
+export default function App() {
+  const [path, go] = useRoute();
+  const home = go("/");
+
+  if (path === "/about") return <AboutPage onHome={home} />;
+  if (path === "/guide") return <GuideIndex onHome={home} />;
+  if (path.startsWith("/guide/")) return <GuidePage slug={path.slice(7)} onHome={home} />;
+  if (path === "/privacy") return <LegalPage which="privacy" onHome={home} />;
+  if (path === "/terms") return <LegalPage which="terms" onHome={home} />;
+  return <Cashflow />;
+}
+
+function Cashflow() {
   const [plan, setPlan] = useState(emptyPlan);
   const [catalog, setCatalog] = useState(seedCatalog);
   const [snaps, setSnaps] = useState([]);
-  const [conn, setConn] = useState({ url: "", key: "", token: "", refresh: "", user: null });
+  const [conn, setConn] = useState({
+    url: HOSTED ? SUPABASE_URL : "",
+    key: HOSTED ? SUPABASE_KEY : "",
+    token: "", refresh: "", user: null,
+  });
   const [tab, setTab] = useState("dash");
   const [wizard, setWizard] = useState(false);
   const [ready, setReady] = useState(false);
@@ -964,6 +1093,10 @@ export default function Cashflow() {
         const r = await storage.get(K_CONN);
         if (r && r.value) saved = JSON.parse(r.value);
       } catch (e) { /* 연결 설정 없음 */ }
+
+      /* 서비스로 운영 중이면 주소·키는 항상 빌드 값을 씁니다.
+         예전에 저장된 값이 남아 있어도 토큰만 이어받습니다. */
+      if (HOSTED && saved) saved = { ...saved, url: SUPABASE_URL, key: SUPABASE_KEY };
 
       if (saved && saved.url && saved.key) {
         setConn(saved);
@@ -1125,7 +1258,7 @@ export default function Cashflow() {
             <span className={online ? "conn on" : "conn"} onClick={() => setTab("conn")} role="button" tabIndex={0}
               onKeyDown={(e) => { if (e.key === "Enter") setTab("conn"); }}>
               <i className="dot" style={{ background: online ? "#1F6B4E" : "#9AA9AE" }} />
-              {online ? conn.user.email : "이 브라우저에만 저장 중"}
+              {online ? conn.user.email : HOSTED ? "로그인하면 어디서든" : "이 브라우저에만 저장 중"}
             </span>
             <span className="mono stat-line">{status}</span>
           </div>
@@ -1140,7 +1273,7 @@ export default function Cashflow() {
           ["scen", "시나리오"],
           ["cat", "상품 카탈로그"],
           ["snap", "스냅샷"],
-          ["conn", "연결"],
+          ["conn", "계정"],
         ].map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "tb on" : "tb"} onClick={() => setTab(k)}>{l}</button>
         ))}
@@ -1177,7 +1310,7 @@ export default function Cashflow() {
         {tab === "conn" && (
           <ConnTab
             conn={conn} persistConn={persistConn} online={online}
-            plan={plan} snaps={snaps} catalog={catalog}
+            plan={plan} snaps={snaps} catalog={catalog} setPlan={setPlan}
             pullRemote={pullRemote} setStatus={setStatus} setSnaps={setSnaps}
           />
         )}
@@ -1186,9 +1319,15 @@ export default function Cashflow() {
       {wizard && <Wizard plan={plan} setPlan={setPlan} onClose={() => setWizard(false)} />}
 
       <footer className="foot">
-        {online
-          ? "내 계획과 스냅샷은 내 계정에만 보입니다 · 상품 카탈로그는 모든 사용자와 공유됩니다"
-          : "지금은 이 브라우저에만 저장됩니다 · '연결' 탭에서 Supabase를 붙이면 어디서든 이어서 볼 수 있습니다"}
+        <a href="/about" className="ilink">소개</a>
+        <span className="fdot">·</span>
+        <a href="/guide" className="ilink">가이드</a>
+        <span className="fdot">·</span>
+        <a href="/privacy" className="ilink">개인정보처리방침</a>
+        <span className="fdot">·</span>
+        <a href="/terms" className="ilink">이용약관</a>
+        <span className="fdot">·</span>
+        {online ? "내 계정에 저장됩니다" : "지금은 이 브라우저에만 저장됩니다"}
       </footer>
     </div>
   );
@@ -1586,15 +1725,18 @@ function WizardVerdict({ draft, advice, unit }) {
 }
 
 /* ---------------- 연결 탭 ---------------- */
-function ConnTab({ conn, persistConn, online, plan, snaps, catalog, pullRemote, setStatus, setSnaps }) {
+function ConnTab({ conn, persistConn, online, plan, snaps, catalog, pullRemote, setStatus, setSnaps, setPlan }) {
   const [url, setUrl] = useState(conn.url || "");
   const [key, setKey] = useState(conn.key || "");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [mode, setMode] = useState("signin");   // signin | signup | reset
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [showSql, setShowSql] = useState(false);
+  const [danger, setDanger] = useState("");     // wipe | delete
 
   const run = async (label, fn) => {
     setBusy(label); setErr(""); setMsg("");
@@ -1602,38 +1744,62 @@ function ConnTab({ conn, persistConn, online, plan, snaps, catalog, pullRemote, 
     setBusy("");
   };
 
+  const live = () => (HOSTED
+    ? { ...conn, url: SUPABASE_URL, key: SUPABASE_KEY }
+    : { ...conn, url: trimUrl(url), key: key.trim() });
+
   const saveEndpoint = () => run("endpoint", async () => {
     if (!trimUrl(url) || !key.trim()) throw new Error("주소와 API 키를 모두 입력하세요.");
+    if (/^sb_secret_/.test(key.trim())) throw new Error("secret key 는 쓰면 안 됩니다. publishable key 를 넣으세요.");
     await persistConn({ ...conn, url: trimUrl(url), key: key.trim() });
     setMsg("주소를 저장했습니다. 이제 로그인하세요.");
   });
 
   const doSignUp = () => run("signup", async () => {
-    const c = { ...conn, url: trimUrl(url), key: key.trim() };
+    if (pw.length < 8) throw new Error("비밀번호는 8자 이상으로 정해주세요.");
+    if (pw !== pw2) throw new Error("비밀번호가 서로 다릅니다.");
+    const c = live();
     const r = await sbSignUp(c, email.trim(), pw);
     if (r && r.access_token) {
       const next = { ...c, token: r.access_token, refresh: r.refresh_token, user: r.user };
       await persistConn(next);
       await pullRemote(next);
-      setMsg("가입하고 바로 연결했습니다.");
+      setMsg("가입했습니다. 이제 어느 기기에서든 같은 내용을 볼 수 있습니다.");
     } else {
-      setMsg("가입 확인 메일을 보냈습니다. 메일에서 확인한 뒤 로그인하세요.");
+      setMsg("가입 확인 메일을 보냈습니다. 메일의 링크를 누른 뒤 로그인하세요.");
+      setMode("signin");
     }
+    setPw(""); setPw2("");
   });
 
   const doSignIn = () => run("signin", async () => {
-    const c = { ...conn, url: trimUrl(url), key: key.trim() };
+    const c = live();
     const r = await sbSignIn(c, email.trim(), pw);
     const next = { ...c, token: r.access_token, refresh: r.refresh_token, user: r.user };
     await persistConn(next);
     const d = await pullRemote(next);
-    setMsg(d.plan ? "서버에 있던 계획을 불러왔습니다." : "서버에 계획이 없어 지금 화면의 내용을 올릴 수 있습니다.");
+    setMsg(d.plan ? "저장해 둔 내용을 불러왔습니다." : "서버에 저장된 내용이 없어 지금 화면의 내용을 올릴 수 있습니다.");
     setPw("");
+  });
+
+  const doReset = () => run("reset", async () => {
+    if (!email.trim()) throw new Error("이메일을 입력하세요.");
+    await sbRecover(live(), email.trim());
+    setMsg("비밀번호 재설정 메일을 보냈습니다. 받은 편지함을 확인하세요.");
+    setMode("signin");
+  });
+
+  const doChangePw = () => run("chpw", async () => {
+    if (pw.length < 8) throw new Error("비밀번호는 8자 이상으로 정해주세요.");
+    if (pw !== pw2) throw new Error("비밀번호가 서로 다릅니다.");
+    await sbUpdatePassword(conn, pw);
+    setMsg("비밀번호를 바꿨습니다.");
+    setPw(""); setPw2("");
   });
 
   const doSignOut = () => run("signout", async () => {
     await persistConn({ ...conn, token: "", refresh: "", user: null });
-    setMsg("로그아웃했습니다. 데이터는 서버에 그대로 남아 있습니다.");
+    setMsg("로그아웃했습니다. 서버에 저장된 내용은 그대로 남아 있습니다.");
   });
 
   const pushAll = () => run("push", async () => {
@@ -1647,110 +1813,209 @@ function ConnTab({ conn, persistConn, online, plan, snaps, catalog, pullRemote, 
 
   const pull = () => run("pull", async () => {
     await pullRemote(conn);
-    setMsg("서버 내용을 불러왔습니다.");
+    setMsg("서버에 저장된 내용을 불러왔습니다.");
+  });
+
+  const doWipe = () => run("wipe", async () => {
+    await remoteWipeData(conn);
+    setSnaps([]);
+    setDanger("");
+    setMsg("서버에 저장된 계획과 스냅샷을 지웠습니다. 이 브라우저의 내용은 그대로입니다.");
+  });
+
+  const doDeleteAccount = () => run("delacct", async () => {
+    await remoteDeleteAccount(conn);
+    await persistConn({ ...conn, token: "", refresh: "", user: null });
+    setSnaps([]);
+    setDanger("");
+    setMsg("계정과 서버의 모든 기록을 지웠습니다.");
   });
 
   const copySql = async () => {
     try {
       await navigator.clipboard.writeText(SCHEMA_SQL);
-      setMsg("SQL을 복사했습니다. Supabase의 SQL Editor에 붙여넣고 실행하세요.");
+      setMsg("SQL 을 복사했습니다. Supabase 의 SQL Editor 에 붙여넣고 실행하세요.");
     } catch (e) {
       setShowSql(true);
       setMsg("복사가 막혀 있어 아래에 펼쳤습니다. 직접 복사하세요.");
     }
   };
 
+  /* ───── 로그인한 상태 ───── */
+  if (online) {
+    return (
+      <>
+        <section className="card">
+          <div className="card-h">
+            <div>
+              <span className="eyebrow en">ACCOUNT</span>
+              <h2>내 계정</h2>
+            </div>
+            <span className="scentag" style={{ borderColor: "#1F6B4E", color: "#1F6B4E" }}>
+              <i className="dot" style={{ background: "#1F6B4E" }} />{conn.user.email}
+            </span>
+          </div>
+          <p className="note">
+            입력한 내용은 저장할 때마다 이 계정으로 올라갑니다. 다른 기기에서 같은 계정으로 로그인하면 이어서 볼 수 있습니다.
+          </p>
+          <div className="row">
+            <button className="btn" onClick={pull} disabled={!!busy}>{busy === "pull" ? "불러오는 중…" : "서버에서 불러오기"}</button>
+            <button className="btn" onClick={pushAll} disabled={!!busy}>{busy === "push" ? "올리는 중…" : "지금 화면 내용 올리기"}</button>
+            <button className="btn" onClick={doSignOut} disabled={!!busy}>로그아웃</button>
+          </div>
+
+          <h4 className="sub-h">비밀번호 바꾸기</h4>
+          <div className="grid">
+            <Field label="새 비밀번호" hint="8자 이상">
+              <input className="in" type="password" value={pw} autoComplete="new-password"
+                onChange={(e) => setPw(e.target.value)} />
+            </Field>
+            <Field label="한 번 더">
+              <input className="in" type="password" value={pw2} autoComplete="new-password"
+                onChange={(e) => setPw2(e.target.value)} />
+            </Field>
+          </div>
+          <div className="row"><button className="btn" onClick={doChangePw} disabled={!!busy}>비밀번호 바꾸기</button></div>
+
+          {err && <p className="msg err">{err}</p>}
+          {msg && <p className="msg ok">{msg}</p>}
+        </section>
+
+        <section className="card">
+          <div className="card-h"><div><span className="eyebrow en">DATA</span><h2>내 데이터</h2></div></div>
+          <div className="tablewrap">
+            <table className="tbl">
+              <thead><tr><th>내용</th><th>어디에 있나</th><th>누가 볼 수 있나</th></tr></thead>
+              <tbody>
+                <tr><td>수입·지출·큰 지출·시나리오</td><td className="mono">plans</td><td>나만</td></tr>
+                <tr><td>버전 스냅샷</td><td className="mono">snapshots</td><td>나만</td></tr>
+                <tr><td>기관·할부·대출 상품</td><td className="mono">orgs, products</td><td>모든 사용자 공유</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="note" style={{ marginTop: 12 }}>
+            개인 데이터는 데이터베이스의 행 수준 보안(RLS)으로 계정별로 분리됩니다.
+            다른 사용자는 물론 로그인하지 않은 사람도 읽을 수 없습니다.
+            상품 카탈로그만 함께 쓰는 공용 정보이니, 거기에는 개인 정보를 넣지 마세요.
+          </p>
+
+          <h4 className="sub-h">지우기</h4>
+          {!danger ? (
+            <div className="row">
+              <button className="btn" onClick={() => setDanger("wipe")}>서버에 저장된 내용 지우기</button>
+              <button className="btn danger" onClick={() => setDanger("delete")}>계정 삭제</button>
+            </div>
+          ) : danger === "wipe" ? (
+            <div className="confirm">
+              <p><b>서버에 저장된 계획과 스냅샷을 모두 지웁니다.</b> 계정은 남고, 이 브라우저에 있는 내용도 그대로입니다. 되돌릴 수 없습니다.</p>
+              <div className="row">
+                <button className="btn" onClick={() => setDanger("")}>취소</button>
+                <button className="btn danger" onClick={doWipe} disabled={!!busy}>{busy === "wipe" ? "지우는 중…" : "지웁니다"}</button>
+              </div>
+            </div>
+          ) : (
+            <div className="confirm">
+              <p><b>계정과 서버의 모든 기록을 지웁니다.</b> 계획, 스냅샷, 로그인 정보가 함께 사라지고 같은 이메일로 다시 가입해야 합니다. 되돌릴 수 없습니다.</p>
+              <p className="mut sm">이 브라우저에 남은 내용은 지워지지 않습니다. 그것까지 없애려면 스냅샷 탭에서 내보내기를 한 뒤 브라우저 데이터를 삭제하세요.</p>
+              <div className="row">
+                <button className="btn" onClick={() => setDanger("")}>취소</button>
+                <button className="btn danger" onClick={doDeleteAccount} disabled={!!busy}>{busy === "delacct" ? "지우는 중…" : "계정을 삭제합니다"}</button>
+              </div>
+            </div>
+          )}
+        </section>
+      </>
+    );
+  }
+
+  /* ───── 로그인 전 ───── */
   return (
     <>
       <section className="card">
         <div className="card-h">
           <div>
-            <span className="eyebrow en">CONNECTION</span>
-            <h2>{online ? "서버에 연결되어 있습니다" : "Supabase에 연결하기"}</h2>
+            <span className="eyebrow en">ACCOUNT</span>
+            <h2>{mode === "signup" ? "회원가입" : mode === "reset" ? "비밀번호 찾기" : "로그인"}</h2>
           </div>
-          {online && <span className="scentag" style={{ borderColor: "#1F6B4E", color: "#1F6B4E" }}>
-            <i className="dot" style={{ background: "#1F6B4E" }} />{conn.user.email}
-          </span>}
         </div>
 
-        {!online && (
-          <p className="note">
-            연결하면 계획·스냅샷이 내 계정에 저장돼 다른 기기에서도 이어서 볼 수 있고, 상품 카탈로그는 모든 사용자가 함께 씁니다.
-            연결 전까지는 지금처럼 이 브라우저에만 저장됩니다.
-          </p>
-        )}
-
-        <h4 className="sub-h">1단계 · 테이블 만들기</h4>
         <p className="note">
-          Supabase 프로젝트의 SQL Editor에서 아래 스키마를 한 번 실행하세요. 테이블 4개와 RLS 정책이 함께 만들어집니다.
+          지금은 입력한 내용이 이 브라우저에만 저장됩니다. 가입하면 계정에 저장되어
+          폰과 PC 어디서든 이어서 볼 수 있고, 브라우저 기록을 지워도 남습니다.
         </p>
-        <div className="row">
-          <button className="btn sm" onClick={copySql}>스키마 SQL 복사</button>
-          <button className="btn sm" onClick={() => setShowSql(!showSql)}>{showSql ? "접기" : "SQL 보기"}</button>
-        </div>
-        {showSql && <pre className="sqlbox mono">{SCHEMA_SQL}</pre>}
 
-        <h4 className="sub-h">2단계 · 프로젝트 주소와 키</h4>
-        <p className="note">
-          Supabase 대시보드의 Settings → API Keys에서 확인할 수 있습니다. 공개용 키라 브라우저에 두어도 되며,
-          실제 접근 제어는 1단계에서 만든 RLS 정책이 담당합니다. <b>service_role 키는 절대 넣지 마세요.</b>
-        </p>
-        <div className="grid">
-          <Field label="Project URL" wide hint="예: https://xxxxxxxx.supabase.co">
-            <input className="in mono" value={url} placeholder="https://....supabase.co"
-              onChange={(e) => setUrl(e.target.value)} />
-          </Field>
-          <Field label="Publishable key" wide hint="sb_publishable_... 또는 예전 anon key">
-            <input className="in mono" value={key} placeholder="sb_publishable_..." type="password"
-              onChange={(e) => setKey(e.target.value)} />
-          </Field>
-        </div>
-        <div className="row"><button className="btn" onClick={saveEndpoint} disabled={busy === "endpoint"}>주소 저장</button></div>
-
-        <h4 className="sub-h">3단계 · 로그인</h4>
-        {online ? (
-          <div className="row">
-            <button className="btn" onClick={pull} disabled={!!busy}>{busy === "pull" ? "불러오는 중…" : "서버에서 불러오기"}</button>
-            <button className="btn" onClick={pushAll} disabled={!!busy}>{busy === "push" ? "올리는 중…" : "지금 화면 내용을 서버로 올리기"}</button>
-            <button className="btn" onClick={doSignOut} disabled={!!busy}>로그아웃</button>
-          </div>
-        ) : (
+        {HOSTED ? null : (
           <>
-            <div className="grid">
-              <Field label="이메일">
-                <input className="in" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-              </Field>
-              <Field label="비밀번호" hint="6자 이상">
-                <input className="in" type="password" value={pw} onChange={(e) => setPw(e.target.value)} />
-              </Field>
+            <div className="wtip bad">
+              이 빌드에는 서버 주소가 들어 있지 않습니다. 직접 Supabase 를 연결해 쓰는 방식입니다.
             </div>
+            <h4 className="sub-h">1단계 · 테이블 만들기</h4>
+            <p className="note">Supabase 프로젝트의 SQL Editor 에서 아래 스키마를 한 번 실행하세요.</p>
             <div className="row">
-              <button className="btn primary" onClick={doSignIn} disabled={!!busy}>{busy === "signin" ? "연결 중…" : "로그인"}</button>
-              <button className="btn" onClick={doSignUp} disabled={!!busy}>{busy === "signup" ? "가입 중…" : "새로 가입"}</button>
+              <button className="btn sm" onClick={copySql}>스키마 SQL 복사</button>
+              <button className="btn sm" onClick={() => setShowSql(!showSql)}>{showSql ? "접기" : "SQL 보기"}</button>
             </div>
+            {showSql && <pre className="sqlbox mono">{SCHEMA_SQL}</pre>}
+
+            <h4 className="sub-h">2단계 · 주소와 키</h4>
+            <p className="note">
+              Settings → API Keys 에서 확인합니다. publishable key 는 공개용이라 브라우저에 두어도 되며,
+              실제 접근 제어는 RLS 가 맡습니다. <b>secret key 는 절대 넣지 마세요.</b>
+            </p>
+            <div className="grid">
+              <Field label="Project URL" wide hint="https://xxxxx.supabase.co">
+                <input className="in mono" value={url} placeholder="https://....supabase.co"
+                  onChange={(e) => setUrl(e.target.value)} />
+              </Field>
+              <Field label="Publishable key" wide hint="sb_publishable_... 또는 예전 anon key">
+                <input className="in mono" value={key} placeholder="sb_publishable_..." type="password"
+                  onChange={(e) => setKey(e.target.value)} />
+              </Field>
+            </div>
+            <div className="row"><button className="btn" onClick={saveEndpoint} disabled={!!busy}>주소 저장</button></div>
+            <h4 className="sub-h">3단계 · 계정</h4>
           </>
         )}
 
+        <div className="grid">
+          <Field label="이메일">
+            <input className="in" type="email" value={email} autoComplete="email"
+              onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+          {mode !== "reset" && (
+            <Field label="비밀번호" hint={mode === "signup" ? "8자 이상" : undefined}>
+              <input className="in" type="password" value={pw}
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                onChange={(e) => setPw(e.target.value)} />
+            </Field>
+          )}
+          {mode === "signup" && (
+            <Field label="비밀번호 한 번 더">
+              <input className="in" type="password" value={pw2} autoComplete="new-password"
+                onChange={(e) => setPw2(e.target.value)} />
+            </Field>
+          )}
+        </div>
+
+        <div className="row" style={{ marginTop: 4 }}>
+          {mode === "signup" && <button className="btn primary" onClick={doSignUp} disabled={!!busy}>{busy === "signup" ? "가입 중…" : "가입하기"}</button>}
+          {mode === "signin" && <button className="btn primary" onClick={doSignIn} disabled={!!busy}>{busy === "signin" ? "확인 중…" : "로그인"}</button>}
+          {mode === "reset" && <button className="btn primary" onClick={doReset} disabled={!!busy}>{busy === "reset" ? "보내는 중…" : "재설정 메일 받기"}</button>}
+        </div>
+
+        <div className="row authswitch">
+          {mode !== "signup" && <button className="link" onClick={() => { setMode("signup"); setErr(""); setMsg(""); }}>처음이신가요? 가입하기</button>}
+          {mode !== "signin" && <button className="link" onClick={() => { setMode("signin"); setErr(""); setMsg(""); }}>이미 계정이 있습니다</button>}
+          {mode !== "reset" && <button className="link" onClick={() => { setMode("reset"); setErr(""); setMsg(""); }}>비밀번호를 잊었습니다</button>}
+        </div>
+
         {err && <p className="msg err">{err}</p>}
         {msg && <p className="msg ok">{msg}</p>}
-      </section>
 
-      <section className="card">
-        <div className="card-h"><div><span className="eyebrow en">DATA MAP</span><h2>어디에 무엇이 저장되나</h2></div></div>
-        <div className="tablewrap">
-          <table className="tbl">
-            <thead><tr><th>내용</th><th>테이블</th><th>공개 범위</th></tr></thead>
-            <tbody>
-              <tr><td>수입·지출·큰 지출·시나리오</td><td className="mono">plans</td><td>본인만</td></tr>
-              <tr><td>버전 스냅샷</td><td className="mono">snapshots</td><td>본인만</td></tr>
-              <tr><td>은행·카드사 등 기관</td><td className="mono">orgs</td><td>모든 사용자 공유</td></tr>
-              <tr><td>할부·대출 상품</td><td className="mono">products</td><td>모든 사용자 공유</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p className="note" style={{ marginTop: 12 }}>
-          연결한 뒤에도 모든 변경은 이 브라우저에 함께 저장됩니다. 서버 저장이 실패해도 작업 내용이 사라지지 않고,
-          화면 오른쪽 위에 어느 쪽에 저장됐는지 표시됩니다.
+        <p className="mut sm" style={{ marginTop: 14 }}>
+          가입하면 <a href="/terms" className="ilink">이용약관</a>과{" "}
+          <a href="/privacy" className="ilink">개인정보처리방침</a>에 동의하는 것으로 봅니다.
+          저장되는 것은 이메일과 직접 입력한 금액뿐이며, 계좌·카드 번호는 받지 않습니다.
         </p>
       </section>
     </>
@@ -2838,7 +3103,7 @@ function SnapTab({ plan, setPlan, snaps, saveSnaps, results, primary, unit }) {
 }
 
 /* ---------------- 스타일 ---------------- */
-function Style() {
+export function Style() {
   return (
     <style>{`
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&display=swap');
@@ -2886,6 +3151,13 @@ function Style() {
 .msg.err{background:var(--badbg);border-color:#E3BDB8;color:#7A1A15}
 .msg.ok{background:var(--okbg);border-color:#BFD6CC;color:#175A3F}
 .btn:disabled{opacity:.5;cursor:default}
+.btn.danger{border-color:#D8B4AE;color:var(--bad);background:#fff}
+.btn.danger:hover{background:var(--badbg);border-color:#C89A93}
+.confirm{background:var(--badbg);border:1px solid #E3BDB8;border-radius:4px;padding:13px 15px}
+.confirm p{margin:0 0 10px;font-size:13px;line-height:1.55}
+.authswitch{margin-top:12px;gap:14px}
+.ilink{color:var(--deep);text-decoration:underline;text-underline-offset:2px}
+.fdot{opacity:.45;margin:0 2px}
 
 .eyebrow{font-family:'IBM Plex Sans KR',system-ui,sans-serif;font-size:11.5px;font-weight:500;
   letter-spacing:0;text-transform:none;color:var(--ink3);display:block;line-height:1.4}
@@ -3147,6 +3419,76 @@ function Style() {
 .shared-note span{font-size:12px;color:#6B5266}
 
 .cmp{margin-top:18px;border-top:1px solid var(--line);padding-top:14px}
+/* ── 소개·가이드·약관 페이지 ── */
+.page{max-width:780px;margin:0 auto;padding:0 2px}
+.page-top{display:flex;justify-content:space-between;align-items:center;gap:16px;
+  flex-wrap:wrap;padding:6px 0 20px;border-bottom:1px solid var(--line);margin-bottom:26px}
+.brand.plain{text-decoration:none;color:inherit;align-items:center}
+.page-top h1{font-size:20px;font-weight:700;letter-spacing:-.02em;margin:0}
+.page-top .tagline{margin:1px 0 0}
+.page-body{padding-bottom:10px}
+.page-title{font-size:27px;font-weight:700;letter-spacing:-.025em;margin:0 0 8px;line-height:1.25}
+.page-lead{font-size:14.5px;color:var(--ink2);margin:0 0 26px;line-height:1.6}
+
+.pr-h{font-size:17px;font-weight:600;letter-spacing:-.015em;margin:30px 0 10px;
+  padding-bottom:7px;border-bottom:1px solid var(--line2)}
+.pr-p{font-size:14.5px;line-height:1.78;margin:0 0 15px;color:var(--ink)}
+.pr-ul{margin:0 0 15px;padding-left:19px;font-size:14.5px;line-height:1.75}
+.pr-ul li{margin-bottom:7px}
+.pr-quote{background:var(--okbg);border-left:3px solid var(--deep);border-radius:0 4px 4px 0;
+  padding:13px 17px;margin:0 0 18px}
+.pr-quote p{margin:0 0 8px;font-size:14px;line-height:1.7}
+.pr-quote p:last-child{margin:0}
+.pr-tbl{font-size:13.5px;margin-bottom:18px}
+.pr-tbl td{vertical-align:middle}
+
+.hero{padding:40px 0 30px;border-bottom:1px solid var(--line)}
+.hero-eyebrow{font-size:12.5px;color:var(--ink3);margin:0 0 10px;letter-spacing:.01em}
+.hero h2{font-size:40px;line-height:1.22;font-weight:700;letter-spacing:-.035em;margin:0 0 18px}
+.hero-lead{font-size:16px;line-height:1.72;color:var(--ink2);max-width:580px;margin:0 0 24px}
+.btn.big{padding:11px 22px;font-size:14.5px}
+
+.feat{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:1px;
+  background:var(--line2);border:1px solid var(--line2);border-radius:4px;margin:30px 0;overflow:hidden}
+.feat article{background:#fff;padding:20px 22px}
+.feat h3{font-size:16px;font-weight:600;margin:5px 0 8px;letter-spacing:-.015em}
+.feat p{margin:0;font-size:13.5px;line-height:1.7;color:var(--ink2)}
+
+.sec-h{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:34px 0 14px}
+.steps{list-style:none;counter-reset:s;margin:0;padding:0;
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.steps li{counter-increment:s;background:#fff;border:1px solid var(--line);border-radius:4px;
+  padding:14px 16px 14px 44px;position:relative;font-size:14px}
+.steps li::before{content:counter(s);position:absolute;left:15px;top:14px;
+  width:19px;height:19px;border-radius:50%;background:var(--deep);color:#fff;
+  display:grid;place-items:center;font-size:11px;font-weight:600;
+  font-family:'IBM Plex Mono',monospace}
+.steps li b{display:block;font-weight:600;margin-bottom:3px}
+.steps li span{font-size:12.5px;color:var(--ink3);line-height:1.5}
+
+.trust{margin-bottom:10px}
+.cta{text-align:center;background:var(--card);border:1px solid var(--line);border-radius:4px;
+  padding:34px 24px;margin:34px 0 10px}
+.cta h3{font-size:21px;font-weight:700;letter-spacing:-.02em;margin:0 0 7px}
+.cta p{margin:0 0 18px;color:var(--ink2);font-size:14px}
+
+.glist{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px}
+.gcard{display:block;background:var(--card);border:1px solid var(--line);border-radius:4px;
+  padding:18px 20px;text-decoration:none;color:inherit}
+.gcard:hover{border-color:var(--deep)}
+.gcard h3{font-size:16px;font-weight:600;margin:0 0 7px;letter-spacing:-.015em;line-height:1.4}
+.gcard p{margin:0;font-size:13px;line-height:1.65;color:var(--ink2)}
+.gmore{display:inline-block;margin-top:11px;font-size:12.5px;color:var(--deep);font-weight:500}
+.gnext{margin-top:40px;padding-top:4px;border-top:1px solid var(--line)}
+
+@media (max-width:640px){
+  .hero{padding:26px 0 22px}
+  .hero h2{font-size:29px}
+  .hero-lead{font-size:14.5px}
+  .page-title{font-size:23px}
+  .page-top{padding-bottom:16px;margin-bottom:20px}
+}
+
 .foot{text-align:center;font-size:10.5px;color:var(--ink3);padding:16px 0 4px}
 
 @media (max-width:640px){
