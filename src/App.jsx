@@ -267,6 +267,40 @@ function money(n, unit) {
   return unit === "man" ? compact(n) + "원" : won(n);
 }
 
+/* ------------------------------------------------------------------
+   입력한 금액을 읽기 쉬운 말로 풀어 씁니다. 120000000 → 1억 2,000만원
+   지금은 원화만 지원합니다. 나중에 사용자별 통화 설정이 붙으면
+   readable(n, code) 의 code 분기만 늘리면 됩니다.
+------------------------------------------------------------------- */
+const KR_UNITS = [
+  [1000000000000, "조"],
+  [100000000, "억"],
+  [10000, "만"],
+];
+
+function korean(n) {
+  const v = Math.round(num(n));
+  if (v === 0) return "0원";
+  let rest = Math.abs(v);
+  const parts = [];
+  for (const [u, label] of KR_UNITS) {
+    const q = Math.floor(rest / u);
+    if (q > 0) {
+      parts.push(q.toLocaleString("ko-KR") + label);
+      rest -= q * u;
+    }
+  }
+  if (rest > 0) parts.push(rest.toLocaleString("ko-KR"));
+  return (v < 0 ? "마이너스 " : "") + parts.join(" ") + "원";
+}
+
+const DEFAULT_CURRENCY = "KRW";
+
+function readable(n, code = DEFAULT_CURRENCY) {
+  if (code === "KRW") return korean(n);
+  return won(n);
+}
+
 /* ---------------- 기본값 ---------------- */
 const FREQ = [
   { v: "monthly", label: "매월", step: 1 },
@@ -754,20 +788,23 @@ function NumIn({ value, onChange, suffix, step = 1, min, comma }) {
         ? ""
         : Number(value).toLocaleString("ko-KR");
     return (
-      <span className="numwrap">
-        <input
-          className="in mono"
-          type="text"
-          inputMode="numeric"
-          value={shown}
-          onChange={(e) => {
-            const neg = e.target.value.trim().startsWith("-");
-            const digits = e.target.value.replace(/[^0-9]/g, "");
-            if (digits === "") { onChange(0); return; }
-            onChange(Number(digits) * (neg ? -1 : 1));
-          }}
-        />
-        {suffix ? <em>{suffix}</em> : null}
+      <span className="numfield">
+        <span className="numwrap">
+          <input
+            className="in mono"
+            type="text"
+            inputMode="numeric"
+            value={shown}
+            onChange={(e) => {
+              const neg = e.target.value.trim().startsWith("-");
+              const digits = e.target.value.replace(/[^0-9]/g, "");
+              if (digits === "") { onChange(0); return; }
+              onChange(Number(digits) * (neg ? -1 : 1));
+            }}
+          />
+          {suffix ? <em>{suffix}</em> : null}
+        </span>
+        <em className="krhint">{readable(value)}</em>
       </span>
     );
   }
@@ -1426,11 +1463,14 @@ function Wizard({ plan, setPlan, onClose }) {
         <>
           <p className="note">필요한 {won(bigTotal)} 중 얼마를 지금 내고, 얼마를 빌릴지 정합니다.</p>
           <div className="grid">
-            <Field label="자기자금" hint={`지금 현금 ${won(d.opening)} 중에서`}>
+            <Field label="자기자금" hint={`지금 현금 ${readable(d.opening)} 중에서`}>
               <NumIn value={d.cash} step={1000000} onChange={(v) => set({ cash: num(v) })} suffix="원" comma />
             </Field>
             <Field label="빌릴 금액" hint="자동 계산">
-              <div className="in readonly mono">{won(loanAmt)}</div>
+              <div className="numfield">
+                <div className="in readonly mono">{won(loanAmt)}</div>
+                <em className="krhint">{readable(loanAmt)}</em>
+              </div>
             </Field>
             {loanAmt > 0 && (
               <>
@@ -1742,10 +1782,10 @@ function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
             {[6, 12, 24, 36, 60, 120].map((h) => <option key={h} value={h}>{h}개월</option>)}
           </select>
         </Field>
-        <Field label="시작 잔고" hint={won(plan.settings.opening)}>
+        <Field label="시작 잔고">
           <NumIn value={plan.settings.opening} step={100000} onChange={(v) => up((p) => { p.settings.opening = num(v); })} suffix="원" comma />
         </Field>
-        <Field label="안전선(최소 유지 잔고)" hint={won(plan.settings.floor)}>
+        <Field label="안전선(최소 유지 잔고)" hint="이 아래로 내려가면 경고">
           <NumIn value={plan.settings.floor} step={100000} onChange={(v) => up((p) => { p.settings.floor = num(v); })} suffix="원" comma />
         </Field>
         <Field label="금액 표기">
@@ -2019,7 +2059,7 @@ function ItemsTab({ plan, up, unit }) {
                 {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
               </select>
             </Field>
-            <Field label="금액" hint={won(edit.amount)}>
+            <Field label="금액">
               <NumIn value={edit.amount} step={10000} onChange={(v) => setEdit({ ...edit, amount: num(v) })} suffix="원" comma />
             </Field>
             <Field label="반복 여부">
@@ -2210,10 +2250,13 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
         </Field>
         {hasLines ? (
           <Field label="총 금액" hint="아래 구성 항목의 합계">
-            <div className="in readonly mono">{won(be.amount)}</div>
+            <div className="numfield">
+              <div className="in readonly mono">{won(be.amount)}</div>
+              <em className="krhint">{readable(be.amount)}</em>
+            </div>
           </Field>
         ) : (
-          <Field label="총 금액" hint={won(be.amount)}>
+          <Field label="총 금액">
             <NumIn value={be.amount} step={100000} onChange={(v) => setBe({ ...be, amount: num(v) })} suffix="원" comma />
           </Field>
         )}
@@ -2239,7 +2282,7 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
                 })}
               </select>
             </Field>
-            <Field label="선납금 / 계약금" hint={won(be.down)}>
+            <Field label="선납금 / 계약금">
               <NumIn value={be.down} step={100000} onChange={(v) => setBe({ ...be, down: num(v) })} suffix="원" comma />
             </Field>
             <Field label="기간">
@@ -2869,6 +2912,9 @@ function Style() {
 .fld-h{font-size:11px;color:var(--ink3);font-family:'IBM Plex Mono','IBM Plex Sans KR',monospace}
 .in{width:100%;border:1px solid var(--line);background:#fff;border-radius:3px;padding:7px 9px;font:inherit;font-size:13.5px;color:var(--ink)}
 .in:focus{border-color:var(--deep)}
+.numfield{display:block;width:100%}
+.krhint{display:block;font-style:normal;font-size:11px;color:var(--ink3);
+  margin-top:3px;text-align:right;line-height:1.3;word-break:keep-all}
 .numwrap{position:relative;display:flex;align-items:center}
 .numwrap em{position:absolute;right:9px;font-style:normal;font-size:11px;color:var(--ink3);pointer-events:none;font-family:'IBM Plex Mono','IBM Plex Sans KR',monospace}
 .numwrap .in{padding-right:34px;text-align:right}
