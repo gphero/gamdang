@@ -874,6 +874,32 @@ function NumIn({ value, onChange, suffix, step = 1, min, comma }) {
   );
 }
 
+/* 받침이 있으면 "을", 없으면 "를" */
+function objPart(word) {
+  const ch = String(word || "").trim().slice(-1);
+  const c = ch.charCodeAt(0);
+  if (c >= 0xac00 && c <= 0xd7a3) return (c - 0xac00) % 28 === 0 ? "를" : "을";
+  return "을";
+}
+
+/* 지우기 전에 무엇을 지우는지 이름을 보여주고 한 번 묻습니다. */
+function Confirm({ open, name, kind, note, onConfirm, onCancel, confirmLabel = "삭제" }) {
+  if (!open) return null;
+  const shown = String(name || "").trim();
+  return (
+    <Modal title={`${kind} 삭제`} onClose={onCancel}
+      footer={<>
+        <button className="btn" onClick={onCancel}>취소</button>
+        <button className="btn danger" onClick={onConfirm}>{confirmLabel}</button>
+      </>}>
+      <p className="confirm-msg">
+        {shown ? <b>&lsquo;{shown}&rsquo;</b> : <span className="mut">이름 없는</span>} {kind}{objPart(kind)} 삭제하시겠습니까?
+      </p>
+      <p className="mut sm">{note || "되돌릴 수 없습니다."}</p>
+    </Modal>
+  );
+}
+
 function Modal({ title, onClose, children, footer, wide }) {
   useEffect(() => {
     const h = (e) => { if (e.key === "Escape") onClose(); };
@@ -1346,6 +1372,7 @@ const LIVING = [
 
 function Wizard({ plan, setPlan, onClose }) {
   const [step, setStep] = useState(0);
+  const [delLiving, setDelLiving] = useState(null);
   const [d, setD] = useState(() => ({
     startMonth: plan.settings.startMonth || nowYM(),
     horizon: 60,
@@ -1509,7 +1536,11 @@ function Wizard({ plan, setPlan, onClose }) {
                   onChange={(e) => { const n = [...d.extraLiving]; n[i] = { ...l, name: e.target.value }; set({ extraLiving: n }); }} />
                 <NumIn value={l.amount} step={50000} suffix="원" comma
                   onChange={(v) => { const n = [...d.extraLiving]; n[i] = { ...l, amount: num(v) }; set({ extraLiving: n }); }} />
-                <button className="link del" onClick={() => set({ extraLiving: d.extraLiving.filter((_, j) => j !== i) })}>삭제</button>
+                <button className="link del" onClick={() => {
+                  if (!String(l.name || "").trim() && !num(l.amount)) {
+                    set({ extraLiving: d.extraLiving.filter((_, j) => j !== i) });
+                  } else setDelLiving(i);
+                }}>삭제</button>
               </div>
             ))}
           </div>
@@ -1656,6 +1687,15 @@ function Wizard({ plan, setPlan, onClose }) {
       {step === 4 && (
         <WizardVerdict draft={draft} advice={advice} unit={plan.settings.unit} />
       )}
+
+      <Confirm open={delLiving !== null}
+        name={delLiving !== null && d.extraLiving[delLiving] && d.extraLiving[delLiving].name}
+        kind="지출 항목"
+        onCancel={() => setDelLiving(null)}
+        onConfirm={() => {
+          set({ extraLiving: d.extraLiving.filter((_, j) => j !== delLiving) });
+          setDelLiving(null);
+        }} />
     </Modal>
   );
 }
@@ -2206,6 +2246,7 @@ function Stat({ k, v, sub, tone }) {
 /* ---------------- 수입·지출 탭 ---------------- */
 function ItemsTab({ plan, up, unit }) {
   const [edit, setEdit] = useState(null);
+  const [del, setDel] = useState(null);
 
   const blank = (kind, flow) => ({
     id: uid(), kind, flow, name: "", amount: 0, cat: flow === "in" ? "급여" : "고정비",
@@ -2278,7 +2319,7 @@ function ItemsTab({ plan, up, unit }) {
                         <td className="r mono mut" data-l="연 증가율">{num(it.growth) ? `${it.growth}%` : "—"}</td>
                         <td className="r nowrap cact">
                           <button className="link" onClick={() => setEdit({ ...it })}>수정</button>
-                          <button className="link del" onClick={() => up((p) => { p.items = p.items.filter((x) => x.id !== it.id); })}>삭제</button>
+                          <button className="link del" onClick={() => setDel(it)}>삭제</button>
                         </td>
                       </tr>
                     ))}
@@ -2303,6 +2344,10 @@ function ItemsTab({ plan, up, unit }) {
           </div>
         ))}
       </section>
+
+      <Confirm open={!!del} name={del && del.name} kind={del && del.flow === "in" ? "수입 항목" : "지출 항목"}
+        onCancel={() => setDel(null)}
+        onConfirm={() => { up((p) => { p.items = p.items.filter((x) => x.id !== del.id); }); setDel(null); }} />
 
       {edit && (
         <Modal title={edit.flow === "in" ? "수입 항목" : "지출 항목"} onClose={() => setEdit(null)}
@@ -2365,6 +2410,7 @@ function ItemsTab({ plan, up, unit }) {
 /* ---------------- 큰 지출 탭 ---------------- */
 function BigsTab({ plan, up, unit, catalog, results, primary }) {
   const [edit, setEdit] = useState(null);
+  const [del, setDel] = useState(null);
 
   const blank = () => ({
     id: uid(), name: "", amount: 0, month: addM(plan.settings.startMonth, 6),
@@ -2443,7 +2489,7 @@ function BigsTab({ plan, up, unit, catalog, results, primary }) {
                       const c = { ...be, id: uid(), name: be.name + " (사본)" };
                       p.bigs.push(c);
                     })}>복제</button>
-                    <button className="link del" onClick={() => up((p) => { p.bigs = p.bigs.filter((x) => x.id !== be.id); })}>삭제</button>
+                    <button className="link del" onClick={() => setDel(be)}>삭제</button>
                   </div>
                 </div>
               );
@@ -2462,6 +2508,11 @@ function BigsTab({ plan, up, unit, catalog, results, primary }) {
         )}
       </section>
 
+      <Confirm open={!!del} name={del && del.name} kind="큰 지출"
+        note="구성 항목과 상환 계획이 함께 사라집니다. 되돌릴 수 없습니다."
+        onCancel={() => setDel(null)}
+        onConfirm={() => { up((p) => { p.bigs = p.bigs.filter((x) => x.id !== del.id); }); setDel(null); }} />
+
       {edit && (
         <BigEditor
           be={edit} setBe={setEdit} catalog={catalog}
@@ -2473,6 +2524,8 @@ function BigsTab({ plan, up, unit, catalog, results, primary }) {
 }
 
 function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
+  const [delLine, setDelLine] = useState(null);
+  const [clearAll, setClearAll] = useState(false);
   const s = bigSchedule(be);
   const product = catalog.products.find((p) => p.id === be.productId);
   const lines = be.lines || [];
@@ -2615,7 +2668,12 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
 
                 <span className="lcalc mono">{won(lineValue(l, base))}</span>
 
-                <button className="link del lx" onClick={() => removeLine(l.id)} aria-label="항목 삭제">삭제</button>
+                <button className="link del lx" aria-label="항목 삭제"
+                  onClick={() => {
+                    /* 비어 있는 줄은 묻지 않고 바로 지웁니다 */
+                    const empty = !String(l.name || "").trim() && !num(l.amount) && !num(l.pct);
+                    if (empty) removeLine(l.id); else setDelLine(l);
+                  }}>삭제</button>
 
                 {l.base && <span className="lbadge">기준</span>}
                 {l.note && <span className="lnote mut">{l.note}</span>}
@@ -2633,7 +2691,7 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
             세율과 수수료율은 조건마다 달라 비워뒀으니 직접 확인해 넣으세요.
           </p>
           <div className="row" style={{ marginTop: 8 }}>
-            <button className="link del" onClick={() => setBe({ ...be, lines: [] })}>항목 전부 지우고 금액만 입력</button>
+            <button className="link del" onClick={() => setClearAll(true)}>항목 전부 지우고 금액만 입력</button>
           </div>
         </>
       )}
@@ -2652,6 +2710,17 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
           </ul>
         )}
       </div>
+
+      <Confirm open={!!delLine} name={delLine && delLine.name} kind="구성 항목"
+        note="총 금액이 그만큼 줄어듭니다."
+        onCancel={() => setDelLine(null)}
+        onConfirm={() => { removeLine(delLine.id); setDelLine(null); }} />
+
+      <Confirm open={clearAll} name={be.name} kind="지출의 구성 항목"
+        confirmLabel="전부 지우기"
+        note="항목을 모두 지우고 총 금액만 직접 넣는 방식으로 돌아갑니다. 적어 둔 항목과 금액은 사라집니다."
+        onCancel={() => setClearAll(false)}
+        onConfirm={() => { setBe({ ...be, lines: [] }); setClearAll(false); }} />
     </Modal>
   );
 }
@@ -2659,6 +2728,7 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
 /* ---------------- 시나리오 탭 ---------------- */
 function ScenTab({ plan, up, unit, results }) {
   const [openId, setOpenId] = useState(null);
+  const [del, setDel] = useState(null);
   const floor = num(plan.settings.floor);
 
   const addScenario = () => up((p) => {
@@ -2715,11 +2785,7 @@ function ScenTab({ plan, up, unit, results }) {
                       <button className="link" onClick={() => setOpenId(sc.id)}>편집</button>
                       <button className="link" onClick={() => dup(sc)}>복제</button>
                       {plan.scenarios.length > 1 && (
-                        <button className="link del" onClick={() => up((p) => {
-                          p.scenarios = p.scenarios.filter((x) => x.id !== sc.id);
-                          p.shown = p.shown.filter((x) => x !== sc.id);
-                          if (!p.shown.length) p.shown = [p.scenarios[0].id];
-                        })}>삭제</button>
+                        <button className="link del" onClick={() => setDel(sc)}>삭제</button>
                       )}
                     </td>
                   </tr>
@@ -2729,6 +2795,18 @@ function ScenTab({ plan, up, unit, results }) {
           </table>
         </div>
       </section>
+
+      <Confirm open={!!del} name={del && del.name} kind="시나리오"
+        note="이 시나리오에만 적용했던 조정 값이 함께 사라집니다. 수입·지출과 큰 지출 자체는 남습니다."
+        onCancel={() => setDel(null)}
+        onConfirm={() => {
+          up((p) => {
+            p.scenarios = p.scenarios.filter((x) => x.id !== del.id);
+            p.shown = p.shown.filter((x) => x !== del.id);
+            if (!p.shown.length) p.shown = [p.scenarios[0].id];
+          });
+          setDel(null);
+        }} />
 
       {openId && (
         <ScenEditor plan={plan} up={up} sc={plan.scenarios.find((s) => s.id === openId)} onClose={() => setOpenId(null)} />
@@ -2830,6 +2908,8 @@ function ScenEditor({ plan, up, sc, onClose }) {
 function CatalogTab({ catalog, saveCatalog }) {
   const [edit, setEdit] = useState(null);
   const [orgEdit, setOrgEdit] = useState(null);
+  const [del, setDel] = useState(null);
+  const [delOrg, setDelOrg] = useState(null);
   const [filter, setFilter] = useState("all");
 
   const list = catalog.products.filter((p) => filter === "all" || p.type === filter);
@@ -2894,7 +2974,7 @@ function CatalogTab({ catalog, saveCatalog }) {
                     <td className="r mono">{num(p.feeRate) ? `${p.feeRate}%` : "—"}</td>
                     <td className="r nowrap">
                       <button className="link" onClick={() => setEdit({ ...p })}>수정</button>
-                      <button className="link del" onClick={() => saveCatalog({ ...catalog, products: catalog.products.filter((x) => x.id !== p.id) })}>삭제</button>
+                      <button className="link del" onClick={() => setDel(p)}>삭제</button>
                     </td>
                   </tr>
                 );
@@ -2911,11 +2991,17 @@ function CatalogTab({ catalog, saveCatalog }) {
               <span key={o.id} className="pill">
                 {o.name}
                 <button className="link" onClick={() => setOrgEdit({ ...o })}>수정</button>
+                <button className="link del" onClick={() => setDelOrg(o)}>삭제</button>
               </span>
             ))}
           </div>
         </div>
       </section>
+
+      <Confirm open={!!del} name={del && del.name} kind="상품"
+        note="모든 사용자가 함께 쓰는 목록에서 사라집니다. 되돌릴 수 없습니다."
+        onCancel={() => setDel(null)}
+        onConfirm={() => { saveCatalog({ ...catalog, products: catalog.products.filter((x) => x.id !== del.id) }); setDel(null); }} />
 
       {edit && (
         <Modal title="상품" onClose={() => setEdit(null)}
@@ -2947,6 +3033,20 @@ function CatalogTab({ catalog, saveCatalog }) {
         </Modal>
       )}
 
+      <Confirm open={!!delOrg} name={delOrg && delOrg.name} kind="기관"
+        note={delOrg && catalog.products.some((x) => x.orgId === delOrg.id)
+          ? "이 기관에 속한 상품도 함께 사라집니다. 모든 사용자가 함께 쓰는 목록입니다."
+          : "모든 사용자가 함께 쓰는 목록에서 사라집니다."}
+        onCancel={() => setDelOrg(null)}
+        onConfirm={() => {
+          saveCatalog({
+            ...catalog,
+            orgs: catalog.orgs.filter((x) => x.id !== delOrg.id),
+            products: catalog.products.filter((x) => x.orgId !== delOrg.id),
+          });
+          setDelOrg(null);
+        }} />
+
       {orgEdit && (
         <Modal title="기관" onClose={() => setOrgEdit(null)}
           footer={<><button className="btn" onClick={() => setOrgEdit(null)}>취소</button>
@@ -2971,6 +3071,7 @@ function SnapTab({ plan, setPlan, snaps, saveSnaps, results, primary, unit }) {
   const [name, setName] = useState("");
   const [memo, setMemo] = useState("");
   const [cmp, setCmp] = useState(null);
+  const [del, setDel] = useState(null);
   const fileRef = useRef(null);
 
   const take = () => {
@@ -3065,7 +3166,7 @@ function SnapTab({ plan, setPlan, snaps, saveSnaps, results, primary, unit }) {
                     <td className="r nowrap">
                       <button className="link" onClick={() => setCmp(cmp === s.id ? null : s.id)}>{cmp === s.id ? "비교 닫기" : "현재와 비교"}</button>
                       <button className="link" onClick={() => setPlan(JSON.parse(JSON.stringify(s.plan)))}>되돌리기</button>
-                      <button className="link del" onClick={() => saveSnaps(snaps.filter((x) => x.id !== s.id))}>삭제</button>
+                      <button className="link del" onClick={() => setDel(s)}>삭제</button>
                     </td>
                   </tr>
                 ))}
@@ -3098,6 +3199,11 @@ function SnapTab({ plan, setPlan, snaps, saveSnaps, results, primary, unit }) {
           </div>
         )}
       </section>
+
+      <Confirm open={!!del} name={del && del.name} kind="버전"
+        note="저장해 둔 그 시점의 계획이 사라집니다. 지금 작업 중인 내용에는 영향이 없습니다."
+        onCancel={() => setDel(null)}
+        onConfirm={() => { saveSnaps(snaps.filter((x) => x.id !== del.id)); setDel(null); }} />
     </>
   );
 }
@@ -3155,6 +3261,8 @@ export function Style() {
 .btn.danger:hover{background:var(--badbg);border-color:#C89A93}
 .confirm{background:var(--badbg);border:1px solid #E3BDB8;border-radius:4px;padding:13px 15px}
 .confirm p{margin:0 0 10px;font-size:13px;line-height:1.55}
+.confirm-msg{margin:0 0 8px;font-size:14.5px;line-height:1.6}
+.confirm-msg b{font-weight:600}
 .authswitch{margin-top:12px;gap:14px}
 .ilink{color:var(--deep);text-decoration:underline;text-underline-offset:2px}
 .fdot{opacity:.45;margin:0 2px}
