@@ -1313,22 +1313,22 @@ function ItemsTab({ plan, up, unit }) {
             {g.list.length === 0 && <p className="mut sm">아직 없습니다. 위 버튼으로 추가하세요.</p>}
             <div className="tablewrap">
               {g.list.length > 0 && (
-                <table className="tbl">
+                <table className="tbl tbl-cards">
                   <thead>
                     <tr><th>이름</th><th>분류</th><th>주기</th><th>기간</th><th className="r">금액</th><th className="r">연 증가율</th><th /></tr>
                   </thead>
                   <tbody>
                     {g.list.map((it) => (
                       <tr key={it.id}>
-                        <td>{it.name || <span className="mut">(이름 없음)</span>}</td>
-                        <td className="mut">{it.cat}</td>
-                        <td className="mono">{it.kind === "oneoff" ? "일회성" : (FREQ.find((f) => f.v === it.freq) || {}).label}</td>
-                        <td className="mono mut">
+                        <td className="cname">{it.name || <span className="mut">(이름 없음)</span>}</td>
+                        <td className="mut" data-l="분류">{it.cat}</td>
+                        <td className="mono" data-l="주기">{it.kind === "oneoff" ? "일회성" : (FREQ.find((f) => f.v === it.freq) || {}).label}</td>
+                        <td className="mono mut" data-l="기간">
                           {it.kind === "oneoff" ? labelYM(it.month) : `${labelYM(it.startMonth)} ~ ${it.endMonth ? labelYM(it.endMonth) : "계속"}`}
                         </td>
-                        <td className={`r mono ${it.flow === "in" ? "pos" : "neg"}`}>{money(it.amount, unit)}</td>
-                        <td className="r mono mut">{num(it.growth) ? `${it.growth}%` : "—"}</td>
-                        <td className="r nowrap">
+                        <td className={`r mono ${it.flow === "in" ? "pos" : "neg"}`} data-l="금액">{money(it.amount, unit)}</td>
+                        <td className="r mono mut" data-l="연 증가율">{num(it.growth) ? `${it.growth}%` : "—"}</td>
+                        <td className="r nowrap cact">
                           <button className="link" onClick={() => setEdit({ ...it })}>수정</button>
                           <button className="link del" onClick={() => up((p) => { p.items = p.items.filter((x) => x.id !== it.id); })}>삭제</button>
                         </td>
@@ -2289,6 +2289,31 @@ function Style() {
 
 @media (max-width:640px){
   .app{padding:12px}
+
+  /* 가로로 눌리는 대신 옆으로 넘겨 보기 */
+  .tablewrap .tbl{min-width:520px}
+
+  /* 수입·지출: 행을 카드로 쌓기 */
+  .tablewrap .tbl.tbl-cards{min-width:0;width:100%}
+  .tbl-cards thead{display:none}
+  .tbl-cards tbody,.tbl-cards tbody tr,.tbl-cards tbody td,
+  .tbl-cards tfoot,.tbl-cards tfoot tr,.tbl-cards tfoot td{display:block;width:100%}
+  .tbl-cards tbody tr{border:1px solid var(--line);border-radius:4px;padding:10px 12px;margin-bottom:8px;background:#fff}
+  .tbl-cards tbody tr:hover{background:#fff}
+  .tbl-cards tbody td{border:0;padding:3px 0;text-align:left;
+    display:flex;justify-content:space-between;align-items:baseline;gap:14px}
+  .tbl-cards tbody td::before{content:attr(data-l);flex:none;color:var(--ink3);font-size:11.5px;
+    font-family:'IBM Plex Sans KR',system-ui,sans-serif}
+  .tbl-cards tbody td.cname{display:block;font-weight:600;font-size:14.5px;
+    padding-bottom:7px;margin-bottom:5px;border-bottom:1px solid var(--line2)}
+  .tbl-cards tbody td.cact{display:flex;justify-content:flex-end;gap:4px;
+    padding-top:7px;margin-top:5px;border-top:1px solid var(--line2)}
+  .tbl-cards tbody td.cact::before,.tbl-cards tbody td.cname::before{content:none}
+  .tbl-cards tfoot tr{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+    border-top:2px solid var(--line);padding:9px 12px 3px;margin-top:2px}
+  .tbl-cards tfoot tr.sub{border-top:0;padding-top:0;margin-top:0}
+  .tbl-cards tfoot td{display:block;width:auto;border:0;padding:0;text-align:left}
+  .tbl-cards tfoot td:empty{display:none}
   .bigrow{grid-template-columns:1fr;gap:8px}
   .bigact{justify-content:flex-start}
   .strip{height:60px}
