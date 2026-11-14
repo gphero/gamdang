@@ -279,6 +279,74 @@ const freqStep = (v) => (FREQ.find((f) => f.v === v) || FREQ[0]).step;
 
 const CATEGORIES = ["급여", "사업·부업", "금융소득", "고정비", "변동비", "교육·육아", "보험", "저축·투자", "기타"];
 
+/* ---------------- 큰 지출 구성 항목 ---------------- */
+/* 비용을 한 덩어리로 넣는 대신 항목별로 쌓습니다.
+   kind:"amount" 는 금액을 직접, kind:"pct" 는 기준 항목(base) 대비 %로 계산합니다.
+   세율·수수료율은 조건마다 달라 기본값을 넣지 않았습니다 — 직접 확인해 입력하세요. */
+const BIG_TEMPLATES = [
+  {
+    id: "house",
+    label: "주택 구입",
+    hint: "매매가에 세금·수수료·이사비까지 더해 실제로 나가는 돈을 봅니다.",
+    lines: [
+      { name: "매매가", kind: "amount", base: true },
+      { name: "취득세", kind: "pct", note: "가격·면적·주택 수에 따라 다릅니다" },
+      { name: "중개수수료", kind: "pct", note: "상한요율은 거래금액 구간별로 다릅니다" },
+      { name: "법무사·등기 비용", kind: "amount" },
+      { name: "이사비", kind: "amount" },
+      { name: "인테리어·수리", kind: "amount" },
+    ],
+  },
+  {
+    id: "car",
+    label: "자동차 구입",
+    hint: "차량 가격에 등록 비용과 초기 지출을 더합니다.",
+    lines: [
+      { name: "차량 가격", kind: "amount", base: true },
+      { name: "취득세", kind: "pct", note: "차종에 따라 다릅니다" },
+      { name: "등록 부대비용", kind: "amount", note: "공채, 번호판, 대행료 등" },
+      { name: "보험료(1년)", kind: "amount" },
+      { name: "탁송료", kind: "amount" },
+      { name: "용품·블랙박스", kind: "amount" },
+    ],
+  },
+  {
+    id: "rent",
+    label: "전세·월세 계약",
+    hint: "보증금과 계약에 드는 비용을 함께 봅니다.",
+    lines: [
+      { name: "보증금", kind: "amount", base: true },
+      { name: "중개수수료", kind: "pct" },
+      { name: "이사비", kind: "amount" },
+      { name: "입주 청소·수리", kind: "amount" },
+    ],
+  },
+];
+
+const newLine = (o = {}) => ({
+  id: uid(), name: "", kind: "amount", amount: 0, pct: 0, note: "", base: false, ...o,
+});
+
+const makeLines = (tplId) => {
+  const t = BIG_TEMPLATES.find((x) => x.id === tplId);
+  return t ? t.lines.map((l) => newLine(l)) : [];
+};
+
+const baseAmount = (lines) => {
+  const b = (lines || []).find((l) => l.base);
+  return b ? num(b.amount) : 0;
+};
+
+function lineValue(l, base) {
+  return l.kind === "pct" ? base * (num(l.pct) / 100) : num(l.amount);
+}
+
+function linesTotal(lines) {
+  if (!lines || !lines.length) return 0;
+  const base = baseAmount(lines);
+  return lines.reduce((a, l) => a + lineValue(l, base), 0);
+}
+
 const REPAY = [
   { v: "annuity", label: "원리금균등" },
   { v: "equalPrincipal", label: "원금균등" },
@@ -1527,6 +1595,21 @@ function BigsTab({ plan, up, unit, catalog, results, primary }) {
 function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
   const s = bigSchedule(be);
   const product = catalog.products.find((p) => p.id === be.productId);
+  const lines = be.lines || [];
+  const hasLines = lines.length > 0;
+  const base = baseAmount(lines);
+
+  /* 항목이 있으면 총 금액은 항목 합계로 유지합니다 */
+  const setLines = (next) => setBe({ ...be, lines: next, amount: linesTotal(next) });
+  const patchLine = (id, patch) =>
+    setLines(lines.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  const removeLine = (id) => setLines(lines.filter((l) => l.id !== id));
+  const addLine = () => setLines([...lines, newLine({ name: "" })]);
+  const useTemplate = (tplId) => {
+    const next = makeLines(tplId);
+    const t = BIG_TEMPLATES.find((x) => x.id === tplId);
+    setBe({ ...be, lines: next, amount: 0, name: be.name || (t ? t.label : "") });
+  };
 
   const pickProduct = (id) => {
     const p = catalog.products.find((x) => x.id === id);
@@ -1551,9 +1634,15 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
           <input className="in" value={be.name} placeholder="예: 자동차 구입, 전세 보증금, 이사"
             onChange={(e) => setBe({ ...be, name: e.target.value })} />
         </Field>
-        <Field label="총 금액" hint={won(be.amount)}>
-          <NumIn value={be.amount} step={100000} onChange={(v) => setBe({ ...be, amount: num(v) })} suffix="원" comma />
-        </Field>
+        {hasLines ? (
+          <Field label="총 금액" hint="아래 구성 항목의 합계">
+            <div className="in readonly mono">{won(be.amount)}</div>
+          </Field>
+        ) : (
+          <Field label="총 금액" hint={won(be.amount)}>
+            <NumIn value={be.amount} step={100000} onChange={(v) => setBe({ ...be, amount: num(v) })} suffix="원" comma />
+          </Field>
+        )}
         <Field label="지출 시점">
           <input className="in mono" type="month" value={be.month} onChange={(e) => setBe({ ...be, month: e.target.value })} />
         </Field>
@@ -1599,6 +1688,72 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
           </>
         )}
       </div>
+
+      <h4 className="sub-h">구성 항목</h4>
+      {!hasLines ? (
+        <div className="tplpick">
+          <p className="note">
+            어떤 지출인지 고르면 들어가는 비용 항목이 자동으로 채워집니다. 금액은 직접 넣으시면 됩니다.
+          </p>
+          <div className="row">
+            {BIG_TEMPLATES.map((t) => (
+              <button key={t.id} className="btn sm" onClick={() => useTemplate(t.id)} title={t.hint}>
+                {t.label}
+              </button>
+            ))}
+            <button className="btn sm" onClick={addLine}>빈 항목부터</button>
+          </div>
+          <p className="mut sm" style={{ marginTop: 10 }}>
+            항목 없이 위의 총 금액만 넣어도 됩니다.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="lines">
+            {lines.map((l) => (
+              <div key={l.id} className={`lrow${l.base ? " isbase" : ""}`}>
+                <input className="in lname" value={l.name} placeholder="항목 이름"
+                  onChange={(e) => patchLine(l.id, { name: e.target.value })} />
+
+                <select className="in lkind" value={l.kind}
+                  onChange={(e) => patchLine(l.id, { kind: e.target.value })}
+                  disabled={l.base}>
+                  <option value="amount">금액</option>
+                  <option value="pct">비율</option>
+                </select>
+
+                {l.kind === "pct" ? (
+                  <NumIn value={l.pct} step={0.1} suffix="%"
+                    onChange={(v) => patchLine(l.id, { pct: num(v) })} />
+                ) : (
+                  <NumIn value={l.amount} step={10000} suffix="원" comma
+                    onChange={(v) => patchLine(l.id, { amount: num(v) })} />
+                )}
+
+                <span className="lcalc mono">{won(lineValue(l, base))}</span>
+
+                <button className="link del lx" onClick={() => removeLine(l.id)} aria-label="항목 삭제">삭제</button>
+
+                {l.base && <span className="lbadge">기준</span>}
+                {l.note && <span className="lnote mut">{l.note}</span>}
+              </div>
+            ))}
+          </div>
+
+          <div className="row" style={{ marginTop: 10, justifyContent: "space-between" }}>
+            <button className="btn sm" onClick={addLine}>항목 추가</button>
+            <span className="ltotal mono">합계 <b>{won(be.amount)}</b></span>
+          </div>
+
+          <p className="mut sm" style={{ marginTop: 8 }}>
+            비율 항목은 <b>기준</b> 항목({lines.find((l) => l.base)?.name || "첫 항목"}) 금액에 곱해 계산합니다.
+            세율과 수수료율은 조건마다 달라 비워뒀으니 직접 확인해 넣으세요.
+          </p>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="link del" onClick={() => setBe({ ...be, lines: [] })}>항목 전부 지우고 금액만 입력</button>
+          </div>
+        </>
+      )}
 
       <div className="calcbox">
         <span className="eyebrow">계산 결과</span>
@@ -2269,6 +2424,35 @@ function Style() {
 .calcbox li{display:flex;justify-content:space-between;gap:12px;padding:3px 0;border-bottom:1px dotted var(--line)}
 .calcbox li:last-child{border:0}
 .calcbox p{margin:6px 0 0;font-size:12.5px}
+
+.in.readonly{background:#F4F7F7;color:var(--ink2);display:flex;align-items:center;justify-content:flex-end}
+
+.tplpick{background:#F4F7F7;border:1px solid var(--line2);border-radius:4px;padding:14px}
+.tplpick .note{margin:0 0 10px}
+
+.lines{display:flex;flex-direction:column;gap:6px}
+.lrow{display:grid;grid-template-columns:1fr 78px 118px 96px auto;gap:6px;align-items:center;
+  padding:6px 8px;border:1px solid var(--line2);border-radius:4px;background:#fff}
+.lrow.isbase{border-color:#BFD6CC;background:#FAFCFB}
+.lrow .in{padding:6px 8px;font-size:13px}
+.lrow .numwrap .in{padding-right:30px}
+.lcalc{text-align:right;font-size:12.5px;color:var(--ink2);white-space:nowrap}
+.lrow.isbase .lcalc{font-weight:600;color:var(--ink)}
+.lx{white-space:nowrap}
+.lbadge{grid-column:1;font-size:10px;color:var(--pos);background:var(--okbg);
+  border-radius:2px;padding:1px 5px;justify-self:start}
+.lnote{grid-column:1/-1;font-size:11px;line-height:1.35}
+.ltotal{font-size:13px;color:var(--ink2)}
+.ltotal b{font-size:15px;color:var(--ink);margin-left:6px}
+
+@media (max-width:640px){
+  .lrow{grid-template-columns:78px 1fr;gap:6px 8px}
+  .lrow .lname{grid-column:1/-1}
+  .lrow .lkind{padding-left:6px;padding-right:4px}
+  .lcalc{grid-column:1/2;text-align:left;font-weight:600;color:var(--ink)}
+  .lx{grid-column:2;justify-self:end}
+  .lbadge{grid-column:1/-1;justify-self:start}
+}
 
 .sub-h{font-size:12.5px;font-weight:600;margin:20px 0 8px;padding-bottom:5px;border-bottom:1px solid var(--line)}
 .ovrow{border:1px solid var(--line2);border-radius:4px;padding:10px 12px;margin-bottom:8px}
