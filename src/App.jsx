@@ -1072,12 +1072,25 @@ export default function Cashflow() {
           </div>
         </div>
         <div className="topright">
-          <span className={online ? "conn on" : "conn"} onClick={() => setTab("conn")} role="button" tabIndex={0}
-            onKeyDown={(e) => { if (e.key === "Enter") setTab("conn"); }}>
-            <i className="dot" style={{ background: online ? "#1F6B4E" : "#9AA9AE" }} />
-            {online ? conn.user.email : "이 브라우저에만 저장 중"}
-          </span>
-          <span className="mono stat-line">{status}</span>
+          <button className="wizbtn" onClick={() => setWizard(true)}
+            title="버는 돈·쓰는 돈·큰 지출을 차례로 넣고 감당 가능한지 판정합니다">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path d="M4 20 14.5 9.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+              <path d="M13 8.5 15.5 11" stroke="currentColor" strokeWidth="3" strokeLinecap="round" fill="none" />
+              <path d="M18 3v4M16 5h4M6.5 4v2.5M5.2 5.2h2.6M19 14v2.5M17.7 15.2h2.6"
+                stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+            </svg>
+            <span className="wizlabel">설정 마법사</span>
+            <span className="wizlabel-sm">마법사</span>
+          </button>
+          <div className="topmeta">
+            <span className={online ? "conn on" : "conn"} onClick={() => setTab("conn")} role="button" tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter") setTab("conn"); }}>
+              <i className="dot" style={{ background: online ? "#1F6B4E" : "#9AA9AE" }} />
+              {online ? conn.user.email : "이 브라우저에만 저장 중"}
+            </span>
+            <span className="mono stat-line">{status}</span>
+          </div>
         </div>
       </header>
 
@@ -1114,7 +1127,7 @@ export default function Cashflow() {
           ) : (
             <Dashboard
               plan={plan} results={results} primary={primary} chartData={chartData}
-              unit={unit} up={up} setTab={setTab} openWizard={() => setWizard(true)}
+              unit={unit} up={up} setTab={setTab}
             />
           )
         )}
@@ -1704,7 +1717,7 @@ function ConnTab({ conn, persistConn, online, plan, snaps, catalog, pullRemote, 
 }
 
 /* ---------------- 대시보드 ---------------- */
-function Dashboard({ plan, results, primary, chartData, unit, up, setTab, openWizard }) {
+function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
   const res = results[primary.id];
   const m = res.metrics;
   const floor = num(plan.settings.floor);
@@ -1764,10 +1777,7 @@ function Dashboard({ plan, results, primary, chartData, unit, up, setTab, openWi
             <span className="eyebrow en">BALANCE PROJECTION</span>
             <h2>시나리오별 잔고 추이</h2>
           </div>
-          <div className="row">
-            <button className="btn sm" onClick={openWizard}>다시 설정하기</button>
-            <button className="btn sm" onClick={() => setTab("scen")}>시나리오 편집</button>
-          </div>
+          <button className="btn sm" onClick={() => setTab("scen")}>시나리오 편집</button>
         </div>
         <div className="chips">
           {plan.scenarios.map((s) => {
@@ -2813,7 +2823,14 @@ function Style() {
 .top p{margin:0;font-size:11px;color:var(--ink3);letter-spacing:.01em}
 .topright{font-size:11px;color:var(--ink3)}
 
-.topright{display:flex;flex-direction:column;align-items:flex-end;gap:3px;font-size:11px;color:var(--ink3)}
+.topright{display:flex;flex-direction:row;align-items:center;gap:12px;font-size:11px;color:var(--ink3)}
+.topmeta{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.wizbtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--deep);
+  background:var(--deep);color:#fff;border-radius:20px;padding:7px 14px;
+  font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap;flex:none}
+.wizbtn:hover{background:#0B4C56;border-color:#0B4C56}
+.wizbtn svg{flex:none}
+.wizlabel-sm{display:none}
 .topright .stat-line{font-size:10.5px}
 .tagline{margin:1px 0 0;font-size:12px;color:var(--ink3);line-height:1.4}
 .conn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:20px;
@@ -3071,6 +3088,12 @@ function Style() {
 
 @media (max-width:640px){
   .app{padding:12px}
+  .top{align-items:center}
+  .topright{gap:8px}
+  .wizbtn{padding:7px 11px}
+  .wizlabel{display:none}
+  .wizlabel-sm{display:inline}
+  .topmeta{font-size:10px}
 
   /* 가로로 눌리는 대신 옆으로 넘겨 보기 */
   .tablewrap .tbl{min-width:520px}
