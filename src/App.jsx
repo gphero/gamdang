@@ -570,6 +570,172 @@ function compute(plan, sc) {
   };
 }
 
+/* ------------------------------------------------------------------
+   주택 취득 관련 참고 요율
+   공식 사이트(위택스·국토교통부·지자체)는 자동 조회가 막혀 있어
+   널리 쓰이는 값을 참고값으로 넣어 두었습니다. 조건마다 달라지므로
+   실제 계약 전에는 반드시 확인하고 직접 고쳐 쓰세요.
+------------------------------------------------------------------- */
+const HOME_COUNTS = [
+  { v: "1", label: "1주택" },
+  { v: "2", label: "2주택" },
+  { v: "3", label: "3주택 이상" },
+  { v: "corp", label: "법인" },
+];
+
+/* 6~9억 구간은 (가액(억) × 2/3 − 3) % */
+function acqTaxRate({ price, homes, adjusted }) {
+  const eok = num(price) / 100000000;
+  const tier = eok <= 6 ? 1 : eok <= 9 ? Math.max(1, (eok * 2) / 3 - 3) : 3;
+  if (homes === "corp") return 12;
+  if (homes === "3") return adjusted ? 12 : 8;
+  if (homes === "2") return adjusted ? 8 : tier;
+  return tier;
+}
+
+function homeTaxRates({ price, homes, adjusted, over85 }) {
+  const acq = acqTaxRate({ price, homes, adjusted });
+  const edu = acq <= 3 ? acq * 0.1 : 0.4;
+  let farm = 0;
+  if (over85) farm = acq <= 3 ? 0.2 : acq <= 8 ? 0.6 : 1.0;
+  return {
+    acq: Math.round(acq * 1000) / 1000,
+    edu: Math.round(edu * 1000) / 1000,
+    farm,
+  };
+}
+
+/* 주택 매매 중개보수 상한요율 (한도액이 있는 구간 포함) */
+function brokerFee(price) {
+  const p = num(price);
+  if (p < 50000000) return { pct: 0.6, cap: 250000 };
+  if (p < 200000000) return { pct: 0.5, cap: 800000 };
+  if (p < 900000000) return { pct: 0.4, cap: 0 };
+  if (p < 1200000000) return { pct: 0.5, cap: 0 };
+  if (p < 1500000000) return { pct: 0.6, cap: 0 };
+  return { pct: 0.7, cap: 0 };
+}
+
+/* ------------------------------------------------------------------
+   감당 가능 판정
+------------------------------------------------------------------- */
+/* 상환이 끝나는 시점까지 보도록 기간을 늘립니다.
+   그러지 않으면 "지출을 미루면 괜찮다"처럼 문제가 예측 기간 밖으로
+   밀려난 것을 통과로 잘못 읽습니다. */
+function extendHorizon(plan) {
+  let need = num(plan.settings.horizon);
+  for (const b of plan.bigs) {
+    const sch = bigSchedule(b);
+    const last = sch.lastMonth || b.month;
+    need = Math.max(need, diffM(plan.settings.startMonth, last) + 13);
+  }
+  if (need <= num(plan.settings.horizon)) return plan;
+  return { ...plan, settings: { ...plan.settings, horizon: Math.min(need, 600) } };
+}
+
+function verdictOf(plan, sc) {
+  const r = compute(plan, sc);
+  const m = r.metrics;
+  const floor = num(plan.settings.floor);
+  return {
+    ok: !m.breach && !m.negative,
+    broke: !!m.negative,
+    breach: m.breach,
+    min: m.min,
+    minMonth: m.minMonth,
+    short: Math.max(0, floor - m.min),
+    res: r,
+  };
+}
+
+/* 계획을 조금씩 바꿔 가며 통과하는 지점을 찾습니다 */
+function prescribe(plan, sc) {
+  const ev = extendHorizon(plan);
+  const base = verdictOf(ev, sc);
+  if (base.ok) return { ok: true, base, fixes: [] };
+
+  const fixes = [];
+  const clone = () => JSON.parse(JSON.stringify(ev));
+  const bigs = ev.bigs.filter((b) => !(sc.off && sc.off[b.id]));
+
+  /* 1) 매달 얼마를 더 남겨야 하나 */
+  const H = Math.max(1, Math.round(num(ev.settings.horizon)));
+  if (base.short > 0) {
+    fixes.push({
+      kind: "trim",
+      label: "매달 덜 쓰기",
+      detail: `지금 계획대로면 ${base.minMonth ? longYM(base.minMonth) : ""}에 안전선보다 ${won(base.short)} 모자랍니다.`,
+      action: `그때까지 매달 약 ${won(Math.ceil(base.short / Math.max(1, diffM(ev.settings.startMonth, base.minMonth) || H)))}씩 덜 쓰면 넘길 수 있습니다.`,
+    });
+  }
+
+  /* 2) 큰 지출을 미루면 */
+  for (const b of bigs) {
+    let found = null;
+    for (let d = 1; d <= 36; d++) {
+      const p2 = clone();
+      const t = p2.bigs.find((x) => x.id === b.id);
+      t.month = addM(b.month, d);
+      if (verdictOf(extendHorizon(p2), sc).ok) { found = d; break; }
+    }
+    if (found) {
+      fixes.push({
+        kind: "delay",
+        label: `${b.name || "큰 지출"} 미루기`,
+        detail: `${found}개월 미뤄 ${longYM(addM(b.month, found))}에 하면`,
+        action: "예측 기간 내내 안전선을 지킵니다.",
+        apply: (p) => { const t = p.bigs.find((x) => x.id === b.id); if (t) t.month = addM(b.month, found); },
+      });
+    }
+  }
+
+  /* 3) 상환 기간을 늘리면 */
+  for (const b of bigs) {
+    if (b.method === "lump") continue;
+    let found = null;
+    for (const n of [24, 36, 48, 60, 72, 84, 120, 180, 240, 360]) {
+      if (n <= num(b.months)) continue;
+      const p2 = clone();
+      const t = p2.bigs.find((x) => x.id === b.id);
+      t.months = n;
+      if (verdictOf(extendHorizon(p2), sc).ok) { found = n; break; }
+    }
+    if (found) {
+      const s0 = bigSchedule(b);
+      const s1 = bigSchedule({ ...b, months: found });
+      fixes.push({
+        kind: "stretch",
+        label: `${b.name || "큰 지출"} 기간 늘리기`,
+        detail: `${num(b.months)}개월 → ${found}개월로 늘리면 월 ${won(s0.monthly)} → ${won(s1.monthly)}`,
+        action: `대신 이자가 ${won(s1.interest - s0.interest)} 더 듭니다.`,
+        apply: (p) => { const t = p.bigs.find((x) => x.id === b.id); if (t) t.months = found; },
+      });
+    }
+  }
+
+  /* 4) 규모를 줄이면 */
+  for (const b of bigs) {
+    let found = null;
+    for (const pct of [95, 90, 85, 80, 75, 70, 60, 50]) {
+      const p2 = clone();
+      const t = p2.bigs.find((x) => x.id === b.id);
+      t.amount = Math.round(num(b.amount) * pct / 100);
+      if (t.lines) t.lines = null;
+      if (verdictOf(extendHorizon(p2), sc).ok) { found = pct; break; }
+    }
+    if (found) {
+      fixes.push({
+        kind: "shrink",
+        label: `${b.name || "큰 지출"} 예산 줄이기`,
+        detail: `${won(b.amount)} → ${won(Math.round(num(b.amount) * found / 100))} (${100 - found}% 줄임)`,
+        action: "이 선까지는 지금 수입으로 감당됩니다.",
+      });
+    }
+  }
+
+  return { ok: false, base, fixes };
+}
+
 /* ---------------- 작은 UI 조각 ---------------- */
 function Field({ label, hint, children, wide }) {
   return (
@@ -709,6 +875,7 @@ export default function Cashflow() {
   const [snaps, setSnaps] = useState([]);
   const [conn, setConn] = useState({ url: "", key: "", token: "", refresh: "", user: null });
   const [tab, setTab] = useState("dash");
+  const [wizard, setWizard] = useState(false);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("");
   const loaded = useRef(false);
@@ -933,17 +1100,21 @@ export default function Cashflow() {
           empty ? (
             <div className="empty">
               <p className="eyebrow">시작하기</p>
-              <h2>아직 넣은 항목이 없습니다.</h2>
-              <p>수입과 지출을 넣으면 앞으로의 월말 잔고가 그려집니다. 감이 안 잡히면 예시로 채운 뒤 숫자만 바꿔도 됩니다.</p>
+              <h2>그 지출, 하고 나서도 생활이 돌아갈까요?</h2>
+              <p>
+                버는 돈과 쓰는 돈, 그리고 계획 중인 큰 지출을 차례로 넣으면
+                앞으로 몇 년치 잔고가 어떻게 움직이는지, 감당할 수 있는지 판정해 드립니다.
+              </p>
               <div className="row">
-                <button className="btn primary" onClick={() => setPlan(samplePlan())}>예시로 채우기</button>
+                <button className="btn primary" onClick={() => setWizard(true)}>차근차근 시작하기</button>
+                <button className="btn" onClick={() => setPlan(samplePlan())}>예시로 채우기</button>
                 <button className="btn" onClick={() => setTab("items")}>직접 입력하기</button>
               </div>
             </div>
           ) : (
             <Dashboard
               plan={plan} results={results} primary={primary} chartData={chartData}
-              unit={unit} up={up} setTab={setTab}
+              unit={unit} up={up} setTab={setTab} openWizard={() => setWizard(true)}
             />
           )
         )}
@@ -961,12 +1132,402 @@ export default function Cashflow() {
         )}
       </main>
 
+      {wizard && <Wizard plan={plan} setPlan={setPlan} onClose={() => setWizard(false)} />}
+
       <footer className="foot">
         {online
           ? "내 계획과 스냅샷은 내 계정에만 보입니다 · 상품 카탈로그는 모든 사용자와 공유됩니다"
           : "지금은 이 브라우저에만 저장됩니다 · '연결' 탭에서 Supabase를 붙이면 어디서든 이어서 볼 수 있습니다"}
       </footer>
     </div>
+  );
+}
+
+/* ---------------- 설정 마법사 ---------------- */
+const LIVING = [
+  { name: "주거비·관리비", cat: "고정비" },
+  { name: "식비·생활용품", cat: "변동비" },
+  { name: "통신비", cat: "고정비" },
+  { name: "교통비·차량유지", cat: "변동비" },
+  { name: "보험료", cat: "보험" },
+  { name: "교육·육아", cat: "교육·육아" },
+  { name: "용돈·여가", cat: "변동비" },
+];
+
+function Wizard({ plan, setPlan, onClose }) {
+  const [step, setStep] = useState(0);
+  const [d, setD] = useState(() => ({
+    startMonth: plan.settings.startMonth || nowYM(),
+    horizon: 60,
+    opening: num(plan.settings.opening),
+    floor: num(plan.settings.floor),
+    income: 0,
+    incomeGrowth: 3,
+    bonus: 0,
+    bonusMonth: addM(plan.settings.startMonth || nowYM(), 6),
+    living: LIVING.map((l) => ({ ...l, amount: 0 })),
+    extraLiving: [],
+    wantBig: true,
+    bigName: "",
+    bigKind: "house",
+    bigMonth: addM(plan.settings.startMonth || nowYM(), 12),
+    price: 0,
+    homes: "1",
+    adjusted: false,
+    over85: false,
+    extras: 0,
+    cash: 0,
+    loanMonths: 360,
+    loanApr: 0,
+    loanRepay: "annuity",
+  }));
+
+  const set = (patch) => setD({ ...d, ...patch });
+
+  const livingTotal =
+    d.living.reduce((a, l) => a + num(l.amount), 0) +
+    d.extraLiving.reduce((a, l) => a + num(l.amount), 0);
+  const monthlyNet = num(d.income) - livingTotal;
+
+  /* 큰 지출 총액: 가격 + 세금·수수료 + 기타 */
+  const rates = homeTaxRates({ price: d.price, homes: d.homes, adjusted: d.adjusted, over85: d.over85 });
+  const broker = brokerFee(d.price);
+  const taxAmt = num(d.price) * (rates.acq + rates.edu + rates.farm) / 100;
+  const brokerAmt = broker.cap
+    ? Math.min(num(d.price) * broker.pct / 100, broker.cap)
+    : num(d.price) * broker.pct / 100;
+  const bigTotal = d.bigKind === "house"
+    ? num(d.price) + taxAmt + brokerAmt + num(d.extras)
+    : num(d.price) + num(d.extras);
+  const loanAmt = Math.max(0, bigTotal - num(d.cash));
+
+  /* 입력한 내용으로 임시 계획을 만들어 판정 */
+  const draft = useMemo(() => {
+    const items = [];
+    if (num(d.income) > 0) {
+      items.push({ id: uid(), kind: "recurring", flow: "in", name: "급여(실수령)", amount: num(d.income),
+        cat: "급여", freq: "monthly", startMonth: d.startMonth, endMonth: "", growth: num(d.incomeGrowth) });
+    }
+    if (num(d.bonus) > 0) {
+      items.push({ id: uid(), kind: "oneoff", flow: "in", name: "성과급·상여", amount: num(d.bonus), cat: "급여", month: d.bonusMonth });
+    }
+    for (const l of [...d.living, ...d.extraLiving]) {
+      if (num(l.amount) > 0) {
+        items.push({ id: uid(), kind: "recurring", flow: "out", name: l.name || "지출", amount: num(l.amount),
+          cat: l.cat || "변동비", freq: "monthly", startMonth: d.startMonth, endMonth: "", growth: 2 });
+      }
+    }
+    const bigs = [];
+    if (d.wantBig && bigTotal > 0) {
+      bigs.push({
+        id: "wiz-big", name: d.bigName || (d.bigKind === "house" ? "주택 구입" : d.bigKind === "car" ? "자동차 구입" : "큰 지출"),
+        amount: bigTotal, month: d.bigMonth,
+        method: loanAmt > 0 ? "loan" : "lump",
+        productId: "", down: num(d.cash), months: Math.max(1, num(d.loanMonths)),
+        apr: num(d.loanApr), feeRate: 0, repayment: d.loanRepay, defer: 1,
+      });
+    }
+    return {
+      settings: { startMonth: d.startMonth, horizon: num(d.horizon), opening: num(d.opening), floor: num(d.floor), unit: plan.settings.unit },
+      items, bigs,
+      scenarios: [{ id: "base", name: "기본", color: SC_COLORS[0], note: "", off: {}, ov: {}, inFactor: 100, outFactor: 100 }],
+      shown: ["base"],
+    };
+  }, [d, bigTotal, loanAmt, plan.settings.unit]);
+
+  const advice = useMemo(() => {
+    if (!draft.items.length) return null;
+    return prescribe(draft, draft.scenarios[0]);
+  }, [draft]);
+
+  const apply = () => {
+    setPlan({ ...draft, scenarios: draft.scenarios, shown: ["base"] });
+    onClose();
+  };
+
+  const STEPS = ["지금 사정", "매달 나가는 돈", "큰 지출", "자금 조달", "감당 가능한가"];
+  const canNext = step < STEPS.length - 1;
+  const skipFunding = !d.wantBig;
+
+  const go = (n) => {
+    if (n === 3 && skipFunding) n = step < 3 ? 4 : 2;
+    setStep(Math.max(0, Math.min(STEPS.length - 1, n)));
+  };
+
+  return (
+    <Modal title="처음 설정" wide onClose={onClose}
+      footer={<>
+        {step > 0 && <button className="btn" onClick={() => go(step - 1)}>이전</button>}
+        <span style={{ flex: 1 }} />
+        {canNext
+          ? <button className="btn primary" onClick={() => go(step + 1)}>다음</button>
+          : <button className="btn primary" onClick={apply}>이대로 시작하기</button>}
+      </>}>
+      <ol className="wsteps">
+        {STEPS.map((t, i) => (
+          <li key={t} className={i === step ? "on" : i < step ? "done" : ""}>
+            <b>{i + 1}</b>{t}
+          </li>
+        ))}
+      </ol>
+
+      {step === 0 && (
+        <>
+          <p className="note">지금 가진 돈과 버는 돈부터 적습니다. 대략이어도 괜찮아요. 나중에 언제든 고칠 수 있습니다.</p>
+          <div className="grid">
+            <Field label="지금 쓸 수 있는 현금" hint="예금·적금 등 바로 꺼낼 수 있는 돈">
+              <NumIn value={d.opening} step={1000000} onChange={(v) => set({ opening: num(v) })} suffix="원" comma />
+            </Field>
+            <Field label="매달 들어오는 돈" hint="실수령 기준">
+              <NumIn value={d.income} step={100000} onChange={(v) => set({ income: num(v) })} suffix="원" comma />
+            </Field>
+            <Field label="연봉 인상률" hint="모르면 그대로 두세요">
+              <NumIn value={d.incomeGrowth} step={0.5} onChange={(v) => set({ incomeGrowth: num(v) })} suffix="%" />
+            </Field>
+            <Field label="상여·성과급" hint="없으면 0">
+              <NumIn value={d.bonus} step={1000000} onChange={(v) => set({ bonus: num(v) })} suffix="원" comma />
+            </Field>
+            <Field label="최소 유지 잔고" hint="이 아래로 떨어지면 위험 신호">
+              <NumIn value={d.floor} step={1000000} onChange={(v) => set({ floor: num(v) })} suffix="원" comma />
+            </Field>
+            <Field label="얼마나 앞을 볼까요">
+              <select className="in" value={d.horizon} onChange={(e) => set({ horizon: Number(e.target.value) })}>
+                {[12, 24, 36, 60, 120, 240, 360].map((h) => <option key={h} value={h}>{h}개월</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="wtip">
+            최소 유지 잔고는 <b>생활비 3~6개월치</b>를 많이 씁니다. 갑자기 수입이 끊겨도 버틸 수 있는 선이에요.
+          </div>
+        </>
+      )}
+
+      {step === 1 && (
+        <>
+          <p className="note">매달 반복해서 나가는 돈입니다. 0으로 두면 계산에서 빠집니다.</p>
+          <div className="lines">
+            {d.living.map((l, i) => (
+              <div key={l.name} className="wrow">
+                <span className="wlabel">{l.name}</span>
+                <NumIn value={l.amount} step={50000} suffix="원" comma
+                  onChange={(v) => { const n = [...d.living]; n[i] = { ...l, amount: num(v) }; set({ living: n }); }} />
+              </div>
+            ))}
+            {d.extraLiving.map((l, i) => (
+              <div key={i} className="wrow">
+                <input className="in" value={l.name} placeholder="항목 이름"
+                  onChange={(e) => { const n = [...d.extraLiving]; n[i] = { ...l, name: e.target.value }; set({ extraLiving: n }); }} />
+                <NumIn value={l.amount} step={50000} suffix="원" comma
+                  onChange={(v) => { const n = [...d.extraLiving]; n[i] = { ...l, amount: num(v) }; set({ extraLiving: n }); }} />
+                <button className="link del" onClick={() => set({ extraLiving: d.extraLiving.filter((_, j) => j !== i) })}>삭제</button>
+              </div>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 10, justifyContent: "space-between" }}>
+            <button className="btn sm" onClick={() => set({ extraLiving: [...d.extraLiving, { name: "", cat: "기타", amount: 0 }] })}>항목 추가</button>
+            <span className="ltotal mono">매달 <b>{won(livingTotal)}</b></span>
+          </div>
+          <div className={`wtip ${monthlyNet < 0 ? "bad" : ""}`}>
+            {num(d.income) > 0
+              ? monthlyNet >= 0
+                ? <>매달 <b>{won(monthlyNet)}</b>이 남습니다. 큰 지출은 결국 여기서 나갑니다.</>
+                : <>매달 <b>{won(-monthlyNet)}</b>씩 모자랍니다. 큰 지출 전에 이것부터 봐야 합니다.</>
+              : <>앞 단계에서 수입을 넣으면 매달 얼마가 남는지 보여드립니다.</>}
+          </div>
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <p className="note">감당할 수 있을지 재보려는 그 지출입니다. 없으면 건너뛰어도 됩니다.</p>
+          <div className="row" style={{ marginBottom: 12 }}>
+            <label className="chk"><input type="checkbox" checked={d.wantBig} onChange={(e) => set({ wantBig: e.target.checked })} /> 계획 중인 큰 지출이 있습니다</label>
+          </div>
+          {d.wantBig && (
+            <>
+              <div className="grid">
+                <Field label="무엇인가요">
+                  <select className="in" value={d.bigKind} onChange={(e) => set({ bigKind: e.target.value })}>
+                    <option value="house">주택 구입</option>
+                    <option value="car">자동차 구입</option>
+                    <option value="etc">그 밖의 큰 지출</option>
+                  </select>
+                </Field>
+                <Field label="이름" hint="비워두면 자동">
+                  <input className="in" value={d.bigName} placeholder={d.bigKind === "house" ? "주택 구입" : d.bigKind === "car" ? "자동차 구입" : "큰 지출"}
+                    onChange={(e) => set({ bigName: e.target.value })} />
+                </Field>
+                <Field label="언제">
+                  <input className="in mono" type="month" value={d.bigMonth} onChange={(e) => set({ bigMonth: e.target.value })} />
+                </Field>
+                <Field label={d.bigKind === "house" ? "매매가" : d.bigKind === "car" ? "차량 가격" : "금액"}>
+                  <NumIn value={d.price} step={1000000} onChange={(v) => set({ price: num(v) })} suffix="원" comma />
+                </Field>
+                {d.bigKind === "house" && (
+                  <>
+                    <Field label="보유 주택 수" hint="취득 후 기준">
+                      <select className="in" value={d.homes} onChange={(e) => set({ homes: e.target.value })}>
+                        {HOME_COUNTS.map((h) => <option key={h.v} value={h.v}>{h.label}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="조정대상지역">
+                      <select className="in" value={d.adjusted ? "y" : "n"} onChange={(e) => set({ adjusted: e.target.value === "y" })}>
+                        <option value="n">아니오</option><option value="y">예</option>
+                      </select>
+                    </Field>
+                    <Field label="전용 85㎡ 초과" hint="농어촌특별세 대상">
+                      <select className="in" value={d.over85 ? "y" : "n"} onChange={(e) => set({ over85: e.target.value === "y" })}>
+                        <option value="n">아니오</option><option value="y">예</option>
+                      </select>
+                    </Field>
+                  </>
+                )}
+                <Field label="그 밖의 비용" hint={d.bigKind === "house" ? "이사비, 수리비 등" : "보험료, 용품 등"}>
+                  <NumIn value={d.extras} step={500000} onChange={(v) => set({ extras: num(v) })} suffix="원" comma />
+                </Field>
+              </div>
+
+              {d.bigKind === "house" && num(d.price) > 0 && (
+                <div className="calcbox">
+                  <span className="eyebrow">가격 말고도 나가는 돈</span>
+                  <ul className="mono">
+                    <li><span>취득세 {rates.acq}%</span><b>{won(num(d.price) * rates.acq / 100)}</b></li>
+                    <li><span>지방교육세 {rates.edu}%</span><b>{won(num(d.price) * rates.edu / 100)}</b></li>
+                    {rates.farm > 0 && <li><span>농어촌특별세 {rates.farm}%</span><b>{won(num(d.price) * rates.farm / 100)}</b></li>}
+                    <li><span>중개보수 {broker.pct}%{broker.cap ? ` (한도 ${won(broker.cap)})` : ""}</span><b>{won(brokerAmt)}</b></li>
+                    <li><span>그 밖의 비용</span><b>{won(d.extras)}</b></li>
+                    <li><span><b>총 필요 금액</b></span><b>{won(bigTotal)}</b></li>
+                  </ul>
+                  <p className="mut sm" style={{ marginTop: 8 }}>
+                    세율은 널리 쓰이는 참고값입니다. 주택 수·면적·지역·감면에 따라 달라지니 계약 전에 위택스나 관할 지자체에서 확인하세요.
+                    시작한 뒤 큰 지출 탭에서 항목별로 고칠 수 있습니다.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {step === 3 && d.wantBig && (
+        <>
+          <p className="note">필요한 {won(bigTotal)} 중 얼마를 지금 내고, 얼마를 빌릴지 정합니다.</p>
+          <div className="grid">
+            <Field label="자기자금" hint={`지금 현금 ${won(d.opening)} 중에서`}>
+              <NumIn value={d.cash} step={1000000} onChange={(v) => set({ cash: num(v) })} suffix="원" comma />
+            </Field>
+            <Field label="빌릴 금액" hint="자동 계산">
+              <div className="in readonly mono">{won(loanAmt)}</div>
+            </Field>
+            {loanAmt > 0 && (
+              <>
+                <Field label="상환 기간">
+                  <NumIn value={d.loanMonths} min={1} onChange={(v) => set({ loanMonths: Math.max(1, num(v)) })} suffix="개월" />
+                </Field>
+                <Field label="연 이자율" hint="승인 금리를 넣으세요">
+                  <NumIn value={d.loanApr} step={0.1} onChange={(v) => set({ loanApr: num(v) })} suffix="%" />
+                </Field>
+                <Field label="상환 방식">
+                  <select className="in" value={d.loanRepay} onChange={(e) => set({ loanRepay: e.target.value })}>
+                    {REPAY.map((r) => <option key={r.v} value={r.v}>{r.label}</option>)}
+                  </select>
+                </Field>
+              </>
+            )}
+          </div>
+          {loanAmt > 0 && (() => {
+            const sch = bigSchedule({ amount: bigTotal, month: d.bigMonth, method: "loan", down: num(d.cash),
+              months: Math.max(1, num(d.loanMonths)), apr: num(d.loanApr), feeRate: 0, repayment: d.loanRepay, defer: 1 });
+            const ratio = num(d.income) > 0 ? (sch.monthly / num(d.income)) * 100 : 0;
+            return (
+              <div className="calcbox">
+                <span className="eyebrow">갚아야 할 돈</span>
+                <ul className="mono">
+                  <li><span>첫 회 상환액</span><b>{won(sch.monthly)}</b></li>
+                  <li><span>총 이자</span><b className={sch.interest > 0 ? "neg" : ""}>{won(sch.interest)}</b></li>
+                  <li><span>상환 종료</span><b>{labelYM(sch.lastMonth)}</b></li>
+                  {num(d.income) > 0 && <li><span>월 수입 대비</span><b className={ratio > 40 ? "neg" : ratio > 30 ? "warnT" : ""}>{ratio.toFixed(0)}%</b></li>}
+                </ul>
+                {num(d.income) > 0 && (
+                  <p className="mut sm" style={{ marginTop: 8 }}>
+                    상환액이 수입의 30%를 넘으면 생활이 빠듯해지고, 40%를 넘으면 예상치 못한 일에 대응하기 어려워집니다.
+                    다음 단계에서 실제로 버틸 수 있는지 보여드립니다.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+        </>
+      )}
+
+      {step === 4 && (
+        <WizardVerdict draft={draft} advice={advice} unit={plan.settings.unit} />
+      )}
+    </Modal>
+  );
+}
+
+function WizardVerdict({ draft, advice, unit }) {
+  if (!advice) {
+    return <div className="wtip">수입과 지출을 넣으면 여기에서 감당 가능한지 판정해 드립니다.</div>;
+  }
+  const { base, fixes, ok } = advice;
+  const m = base.res.metrics;
+
+  return (
+    <>
+      <div className={`wverdict ${ok ? "ok" : base.broke ? "bad" : "warn"}`}>
+        <strong>
+          {ok ? "감당할 수 있습니다." : base.broke ? "지금 계획으로는 감당하기 어렵습니다." : "빠듯합니다. 조정이 필요합니다."}
+        </strong>
+        <span>
+          {ok
+            ? `상환이 끝날 때까지 안전선을 지키고, 가장 낮을 때 잔고가 ${money(m.min, unit)}입니다.`
+            : base.broke
+            ? `${longYM(m.negative)}에 잔고가 바닥납니다.`
+            : `${longYM(base.breach)}에 안전선 아래로 내려가고, 가장 낮을 때 ${money(m.min, unit)}까지 떨어집니다.`}
+        </span>
+      </div>
+
+      <div className="stats" style={{ marginTop: 12 }}>
+        <Stat k="기간 말 잔고" v={money(m.end, unit)} tone={m.end < 0 ? "bad" : "ok"} />
+        <Stat k="최저 잔고" v={money(m.min, unit)} sub={m.minMonth ? longYM(m.minMonth) : ""} tone={m.min < 0 ? "bad" : m.min < num(draft.settings.floor) ? "warn" : "ok"} />
+        <Stat k="월평균 순현금흐름" v={money(m.avgNet, unit)} tone={m.avgNet < 0 ? "warn" : "ok"} />
+        <Stat k="총 이자" v={money(m.interest, unit)} tone={m.interest > 0 ? "warn" : "ok"} />
+      </div>
+
+      {!ok && (
+        <>
+          <h4 className="sub-h">이렇게 하면 됩니다</h4>
+          {fixes.length === 0 ? (
+            <div className="wtip bad">
+              지출 시점을 미루거나 기간을 늘리는 것만으로는 해결되지 않습니다.
+              수입을 늘리거나 지출 규모를 크게 줄여야 합니다.
+            </div>
+          ) : (
+            <div className="fixes">
+              {fixes.map((f, i) => (
+                <div key={i} className="fix">
+                  <span className="eyebrow">{f.label}</span>
+                  <p>{f.detail}</p>
+                  <p className="mut">{f.action}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="mut sm" style={{ marginTop: 10 }}>
+            지금 이대로 시작해도 됩니다. 시나리오 탭에서 여러 안을 나란히 비교할 수 있습니다.
+          </p>
+        </>
+      )}
+
+      {ok && (
+        <div className="wtip" style={{ marginTop: 12 }}>
+          시작한 뒤에는 <b>시나리오</b> 탭에서 다른 안과 비교해 보세요.
+          지출을 앞당기거나 기간을 줄이면 얼마나 빠듯해지는지 바로 보입니다.
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1143,7 +1704,7 @@ function ConnTab({ conn, persistConn, online, plan, snaps, catalog, pullRemote, 
 }
 
 /* ---------------- 대시보드 ---------------- */
-function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
+function Dashboard({ plan, results, primary, chartData, unit, up, setTab, openWizard }) {
   const res = results[primary.id];
   const m = res.metrics;
   const floor = num(plan.settings.floor);
@@ -1203,7 +1764,10 @@ function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
             <span className="eyebrow en">BALANCE PROJECTION</span>
             <h2>시나리오별 잔고 추이</h2>
           </div>
-          <button className="btn sm" onClick={() => setTab("scen")}>시나리오 편집</button>
+          <div className="row">
+            <button className="btn sm" onClick={openWizard}>다시 설정하기</button>
+            <button className="btn sm" onClick={() => setTab("scen")}>시나리오 편집</button>
+          </div>
         </div>
         <div className="chips">
           {plan.scenarios.map((s) => {
@@ -2426,6 +2990,40 @@ function Style() {
 .calcbox p{margin:6px 0 0;font-size:12.5px}
 
 .in.readonly{background:#F4F7F7;color:var(--ink2);display:flex;align-items:center;justify-content:flex-end}
+
+.wsteps{display:flex;gap:4px;list-style:none;margin:0 0 16px;padding:0;flex-wrap:wrap}
+.wsteps li{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink3);
+  padding:5px 10px;border-radius:20px;border:1px solid var(--line);background:#fff}
+.wsteps li b{width:17px;height:17px;border-radius:50%;background:var(--line);color:#fff;
+  display:grid;place-items:center;font-size:10.5px;font-weight:600}
+.wsteps li.on{border-color:var(--deep);color:var(--deep);font-weight:600}
+.wsteps li.on b{background:var(--deep)}
+.wsteps li.done b{background:var(--pos)}
+.wsteps li.done{color:var(--ink2)}
+
+.wrow{display:grid;grid-template-columns:1fr 150px auto;gap:8px;align-items:center}
+.wlabel{font-size:13.5px}
+.wtip{margin-top:14px;background:var(--okbg);border:1px solid #BFD6CC;border-radius:4px;
+  padding:11px 14px;font-size:12.5px;color:var(--ink2);line-height:1.5}
+.wtip.bad{background:var(--warnbg);border-color:#E4D4A0}
+.wtip b{color:var(--ink)}
+
+.wverdict{display:flex;flex-direction:column;gap:3px;padding:14px 16px;border-radius:4px;border:1px solid}
+.wverdict strong{font-size:16px;font-weight:700;letter-spacing:-.01em}
+.wverdict span{font-size:13px;color:var(--ink2)}
+.wverdict.ok{background:var(--okbg);border-color:#BFD6CC}
+.wverdict.warn{background:var(--warnbg);border-color:#E4D4A0}
+.wverdict.bad{background:var(--badbg);border-color:#E3BDB8}
+
+.fixes{display:flex;flex-direction:column;gap:8px}
+.fix{border:1px solid var(--line2);border-left:3px solid var(--deep);border-radius:4px;padding:10px 13px}
+.fix p{margin:3px 0 0;font-size:13px}
+.fix p.mut{font-size:12px}
+
+@media (max-width:640px){
+  .wrow{grid-template-columns:1fr 120px}
+  .wsteps li{font-size:11px;padding:4px 8px}
+}
 
 .tplpick{background:#F4F7F7;border:1px solid var(--line2);border-radius:4px;padding:14px}
 .tplpick .note{margin:0 0 10px}
