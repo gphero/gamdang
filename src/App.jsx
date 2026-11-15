@@ -6,7 +6,7 @@ import {
 import { storage } from "./storage.js";
 import { SUPABASE_URL, SUPABASE_KEY, HOSTED, SERVICE, U, toPath } from "./config.js";
 import { AboutPage, GuideIndex, GuidePage, LegalPage } from "./Pages.jsx";
-import { GUIDES } from "./content.js";
+import { GUIDES } from "./guides.js";
 import { tipsFor, EFFORT } from "./savetips.js";
 import {
   listTips, myVotes, addTip, editTip, removeTip, vote, isAdmin, listReports, setHidden,

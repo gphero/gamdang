@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
-import { GUIDES, GUIDE_PATH, PRIVACY, TERMS } from "./content.js";
+import { PRIVACY, TERMS } from "./content.js";
+import { GUIDES, GUIDE_PATH, guideBySlug } from "./guides.js";
 import { SERVICE, U } from "./config.js";
 import { Style } from "./App.jsx";
 
@@ -247,7 +248,6 @@ export function AboutPage({ onHome }) {
 }
 
 export function GuideIndex({ onHome }) {
-  const byslug = (sl) => GUIDES.find((g) => g.slug === sl);
   return (
     <PageShell title="올바른 가계경제 만들기" onHome={onHome}
       lead="순서가 있습니다. 쓰는 돈을 알고, 무너지지 않을 선을 만들고, 남는 돈을 굴리고, 지치지 않게 유지하면서, 그다음에 큰 지출을 감당합니다. 이 도구가 계산에 쓰는 기준을 글로 풀었습니다.">
@@ -262,17 +262,13 @@ export function GuideIndex({ onHome }) {
               </div>
             </div>
             <div className="glist">
-              {stage.slugs.map((sl) => {
-                const g = byslug(sl);
-                if (!g) return null;
-                return (
-                  <a key={sl} className="gcard" href={U(`/guide/${g.slug}`)}>
-                    <h3>{g.title}</h3>
-                    <p>{g.summary}</p>
-                    <span className="gmore">읽기 →</span>
-                  </a>
-                );
-              })}
+              {stage.items.map((g) => (
+                <a key={g.slug} className="gcard" href={U(`/guide/${g.slug}`)}>
+                  <h3>{g.title}</h3>
+                  <p>{g.summary}</p>
+                  <span className="gmore">읽기 →</span>
+                </a>
+              ))}
             </div>
           </section>
         ))}
@@ -288,7 +284,7 @@ export function GuideIndex({ onHome }) {
 }
 
 export function GuidePage({ slug, onHome }) {
-  const g = GUIDES.find((x) => x.slug === slug);
+  const g = guideBySlug(slug);
   if (!g) {
     return (
       <PageShell title="찾을 수 없는 글" onHome={onHome}>
@@ -298,10 +294,10 @@ export function GuidePage({ slug, onHome }) {
     );
   }
   /* 읽는 순서상 바로 다음 글을 먼저 보여줍니다 */
-  const order = GUIDE_PATH.flatMap((st) => st.slugs);
-  const at = order.indexOf(slug);
-  const rest = at >= 0 ? [...order.slice(at + 1), ...order.slice(0, at)] : order.filter((x) => x !== slug);
-  const others = rest.map((sl) => GUIDES.find((x) => x.slug === sl)).filter(Boolean);
+  const at = GUIDES.findIndex((x) => x.slug === slug);
+  const others = at >= 0
+    ? [...GUIDES.slice(at + 1), ...GUIDES.slice(0, at)]
+    : GUIDES.filter((x) => x.slug !== slug);
   return (
     <PageShell title={g.title} lead={g.summary} onHome={onHome}>
       <Prose body={g.body} />
