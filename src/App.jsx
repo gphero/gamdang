@@ -7,6 +7,11 @@ import { storage } from "./storage.js";
 import { SUPABASE_URL, SUPABASE_KEY, HOSTED, SERVICE } from "./config.js";
 import { AboutPage, GuideIndex, GuidePage, LegalPage } from "./Pages.jsx";
 import { GUIDES } from "./content.js";
+import { tipsFor, EFFORT } from "./savetips.js";
+import {
+  listTips, myVotes, addTip, editTip, removeTip, vote, isAdmin, listReports, setHidden,
+  canRead, canWrite, cleanTip, tipProblem, findDuplicate, TIP_LIMITS, TIPS_SQL,
+} from "./tipsapi.js";
 
 /* ------------------------------------------------------------------
    감당할수있겠나! — 큰 지출을 감당할 수 있는지 미리 굴려보는 가계 현금흐름 예측 시스템
@@ -892,6 +897,88 @@ function prescribe(plan, sc) {
   return { ok: false, base, fixes };
 }
 
+/* ------------------------------------------------------------------
+   입력 점검
+   빠진 항목이 있으면 예측은 대개 실제보다 낙관적으로 나옵니다.
+   무엇이 비어 있는지, 왜 필요한지, 어디로 가면 되는지 알려줍니다.
+------------------------------------------------------------------- */
+const hasWord = (items, re, flow) =>
+  items.some((i) => (!flow || i.flow === flow) && re.test(String(i.name || "")));
+
+function checkGaps(plan, res) {
+  const items = plan.items || [];
+  const outs = items.filter((i) => i.flow === "out");
+  const recurOut = outs.filter((i) => i.kind !== "oneoff");
+  const g = [];
+  const add = (level, tab, title, why, label) => g.push({ level, tab, title, why, label: label || title });
+
+  if (!items.some((i) => i.flow === "in")) {
+    add("must", "items", "수입이 없습니다", "들어오는 돈이 없으면 잔고는 줄기만 합니다. 실수령 기준으로 넣으세요.", "수입");
+  }
+  if (!recurOut.length) {
+    add("must", "items", "매달 나가는 돈이 없습니다", "지출을 넣지 않으면 쓰지 않고 사는 것으로 계산됩니다.", "지출");
+  } else {
+    if (!hasWord(outs, /주거|월세|전세|관리비|임대|주택/)) {
+      add("must", "items", "주거비가 안 보입니다", "대개 지출에서 가장 큰 몫입니다. 월세·관리비·주택담보대출 상환을 넣으세요.", "주거비");
+    }
+    if (!hasWord(outs, /식비|생활|장보|먹|마트/)) {
+      add("must", "items", "식비·생활비가 안 보입니다", "가장 자주 빠지고 가장 크게 어긋나는 항목입니다.", "식비·생활비");
+    }
+    if (!hasWord(outs, /통신|휴대|핸드폰|인터넷/)) {
+      add("should", "items", "통신비가 안 보입니다", "줄이기 가장 쉬운 고정비이기도 합니다.");
+    }
+    if (!hasWord(outs, /보험/)) {
+      add("should", "items", "보험료가 안 보입니다", "없다면 넘어가도 됩니다. 연납이면 주기를 매년으로 두세요.");
+    }
+    if (!hasWord(outs, /교통|차량|주유|기름|대중교통/)) {
+      add("nice", "items", "교통비·차량유지비가 안 보입니다", "주유, 대중교통, 보험 외 차량 유지비를 말합니다.");
+    }
+  }
+
+  const irregular = outs.some((i) => i.kind === "oneoff" || ["quarterly", "semiannual", "yearly"].includes(i.freq));
+  if (recurOut.length && !irregular) {
+    add("must", "items", "달력에 없는 지출이 하나도 없습니다",
+      "경조사·명절·자동차세·보험 연납처럼 매달 나가지 않는 돈입니다. 이게 빠지면 특정 달에만 갑자기 모자랍니다.", "불규칙 지출");
+  }
+
+  const grown = recurOut.filter((i) => num(i.growth) > 0).length;
+  if (recurOut.length >= 3 && grown === 0) {
+    add("should", "items", "물가 상승이 반영되지 않았습니다",
+      "모든 항목의 연 증가율이 0입니다. 몇 년을 보는 계획이라면 지출은 해마다 오릅니다.");
+  }
+
+  if (num(plan.settings.opening) <= 0) {
+    add("must", "dash", "시작 잔고가 0입니다", "지금 쓸 수 있는 현금을 넣어야 어디서 출발하는지 알 수 있습니다.", "시작 잔고");
+  }
+
+  const monthlyOut = recurOut.reduce((a, i) => a + num(i.amount) / freqStep(i.freq), 0);
+  const floor = num(plan.settings.floor);
+  if (floor <= 0) {
+    add("must", "dash", "안전선이 0입니다", "잔고가 바닥나기 직전까지 '여유 있음'으로 나옵니다. 생활비 3~6개월치로 잡으세요.", "안전선");
+  } else if (monthlyOut > 0 && floor < monthlyOut * 3) {
+    add("should", "dash", "안전선이 낮습니다",
+      `생활비 ${(floor / monthlyOut).toFixed(1)}개월치입니다. 수입이 끊기면 버티기 빠듯합니다.`);
+  }
+
+  if (!(plan.bigs || []).length) {
+    add("should", "bigs", "계획 중인 큰 지출이 없습니다", "이 도구는 그 지출을 감당할 수 있는지 재는 쪽에 쓸모가 있습니다.");
+  }
+
+  const free = res.metrics.avgFree;
+  if (free > 300000 && !(plan.savings || []).length) {
+    add("nice", "save", "남는 돈이 묶여 있지 않습니다",
+      `매달 ${won(free)}이 통장에 그냥 쌓입니다. 쓸 일이 정해지지 않았다면 적금으로 옮기는 편이 낫습니다.`);
+  }
+
+  /* 상환이 예측 기간 밖에서 끝나면 지금 화면은 절반만 보여주는 셈입니다 */
+  if (res.metrics.tail > 0) {
+    add("should", "dash", "예측 기간이 상환보다 짧습니다",
+      `기간 뒤에도 ${won(res.metrics.tail)}을 더 갚아야 합니다. 기간을 늘려야 끝까지 보입니다.`);
+  }
+
+  return g;
+}
+
 /* ---------------- 작은 UI 조각 ---------------- */
 function Field({ label, hint, children, wide }) {
   return (
@@ -1380,6 +1467,7 @@ function Cashflow() {
           ["items", "수입·지출"],
           ["bigs", "큰 지출"],
           ["save", "저축"],
+          ["tips", "아껴보기"],
           ["scen", "시나리오"],
           ["cat", "상품 카탈로그"],
           ["snap", "스냅샷"],
@@ -1415,6 +1503,7 @@ function Cashflow() {
         {tab === "items" && <ItemsTab plan={plan} up={up} unit={unit} />}
         {tab === "bigs" && <BigsTab plan={plan} up={up} unit={unit} catalog={catalog} results={results} primary={primary} />}
         {tab === "save" && <SavingsTab plan={plan} up={up} unit={unit} results={results} primary={primary} />}
+        {tab === "tips" && <SaveTab plan={plan} conn={conn} unit={unit} setTab={setTab} />}
         {tab === "scen" && <ScenTab plan={plan} up={up} unit={unit} results={results} />}
         {tab === "cat" && <CatalogTab catalog={catalog} saveCatalog={saveCatalog} />}
         {tab === "snap" && <SnapTab plan={plan} setPlan={setPlan} snaps={snaps} saveSnaps={saveSnaps} results={results} primary={primary} unit={unit} />}
@@ -1962,7 +2051,7 @@ function ConnTab({ conn, persistConn, online, plan, snaps, catalog, pullRemote, 
 
   const copySql = async () => {
     try {
-      await navigator.clipboard.writeText(SCHEMA_SQL);
+      await navigator.clipboard.writeText(`${SCHEMA_SQL}\n${TIPS_SQL}`);
       setMsg("SQL 을 복사했습니다. Supabase 의 SQL Editor 에 붙여넣고 실행하세요.");
     } catch (e) {
       setShowSql(true);
@@ -2084,7 +2173,7 @@ function ConnTab({ conn, persistConn, online, plan, snaps, catalog, pullRemote, 
               <button className="btn sm" onClick={copySql}>스키마 SQL 복사</button>
               <button className="btn sm" onClick={() => setShowSql(!showSql)}>{showSql ? "접기" : "SQL 보기"}</button>
             </div>
-            {showSql && <pre className="sqlbox mono">{SCHEMA_SQL}</pre>}
+            {showSql && <pre className="sqlbox mono">{`${SCHEMA_SQL}\n${TIPS_SQL}`}</pre>}
 
             <h4 className="sub-h">2단계 · 주소와 키</h4>
             <p className="note">
@@ -2157,6 +2246,8 @@ function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
   const m = res.metrics;
   const floor = num(plan.settings.floor);
   const [openRow, setOpenRow] = useState(null);
+  const gaps = useMemo(() => checkGaps(plan, res), [plan, res]);
+  const mustGaps = gaps.filter((x) => x.level === "must");
 
   const verdict = m.negative
     ? { t: "bad", h: `${longYM(m.negative)}에 잔고가 바닥납니다`, s: "지출 시점을 미루거나 상환 기간을 늘려서 다시 보세요." }
@@ -2191,6 +2282,8 @@ function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
         </Field>
       </section>
 
+      <GapPanel gaps={gaps} setTab={setTab} />
+
       {(() => {
         /* 비상금(안전선)은 생활비 몇 달치로 잡는 게 보통입니다.
            실제 지출에서 계산해 바로 적용할 수 있게 합니다. */
@@ -2221,9 +2314,16 @@ function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
         );
       })()}
 
-      <div className={`verdict ${verdict.t}`}>
+      <div className={`verdict ${mustGaps.length ? "stale" : verdict.t}`}>
         <strong>{verdict.h}</strong>
         <span>{verdict.s}</span>
+        {mustGaps.length > 0 && (
+          <span className="v-warn">
+            다만 {mustGaps.slice(0, 3).map((x) => x.label).join(", ")}
+            {mustGaps.length > 3 ? ` 외 ${mustGaps.length - 3}가지` : ""}가 아직 비어 있습니다.
+            <b> 이 판정은 그만큼 낙관적입니다.</b> 위에서 채운 뒤 다시 보세요.
+          </span>
+        )}
       </div>
 
       <LevelStrip result={res} floor={floor} unit={unit} />
@@ -2352,6 +2452,51 @@ function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
   );
 }
 
+function GapPanel({ gaps, setTab }) {
+  const [open, setOpen] = useState(false);
+  if (!gaps.length) {
+    return (
+      <div className="gaps ok">
+        <span className="g-dot ok" />
+        <div className="g-text"><b>빠진 항목 없이 다 채우셨습니다.</b> 아래 결과를 그대로 믿으셔도 됩니다.</div>
+      </div>
+    );
+  }
+  const must = gaps.filter((x) => x.level === "must");
+  const LABEL = { must: "꼭 필요", should: "넣는 게 좋음", nice: "있으면 좋음" };
+
+  return (
+    <div className={`gaps${must.length ? " warn" : ""}`}>
+      <button className="g-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className={`g-dot${must.length ? " warn" : " mild"}`} />
+        <span className="g-text">
+          {must.length > 0
+            ? <><b>아직 안 넣은 항목이 {must.length}개 있습니다.</b> 지출이 빠져 있으면 결과가 실제보다 낙관적으로 나옵니다.</>
+            : <><b>더 챙기면 좋을 항목이 {gaps.length}개 있습니다.</b> 지금도 볼 수는 있지만 더 정확해집니다.</>}
+        </span>
+        <span className="g-toggle">{open ? "접기" : `${gaps.length}개 보기`}</span>
+      </button>
+
+      {open && (
+        <ul className="g-list">
+          {gaps.map((x, i) => (
+            <li key={i} className={x.level}>
+              <div>
+                <b>{x.title}</b>
+                <em>{LABEL[x.level]}</em>
+                <p>{x.why}</p>
+              </div>
+              <button className="btn sm" onClick={() => setTab(x.tab)}>
+                {x.tab === "dash" ? "위에서 고치기" : "넣으러 가기"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function Stat({ k, v, sub, tone }) {
   return (
     <div className={`stat ${tone || ""}`}>
@@ -2377,6 +2522,386 @@ const FORGOTTEN = [
   { name: "아이 학기 초 비용", cat: "교육·육아", freq: "semiannual", why: "입학·새 학기에 몰립니다" },
   { name: "종합소득세", cat: "기타", freq: "yearly", why: "사업·임대 소득이 있다면 5월" },
 ];
+
+/* ==================================================================
+   아껴보기 — 입력한 지출 항목에 맞는 절약 방법
+   기본 팁(savetips.js)과 사용자가 올린 꿀팁을 함께 보여줍니다.
+================================================================== */
+
+/** 사용자 꿀팁의 키워드가 항목 이름에 걸리는지 */
+const tipKeyHit = (tip, name) => {
+  const n = String(name || "").toLowerCase();
+  if (!n) return false;
+  const words = String(tip.keywords || "")
+    .split(/[,\s·/]+/).map((w) => w.trim().toLowerCase()).filter((w) => w.length >= 2);
+  return words.some((w) => n.includes(w) || w.includes(n));
+};
+
+function EffortTag({ kind }) {
+  const e = EFFORT[kind];
+  if (!e) return null;
+  return <span className={`eff ${e.tone}`}>{e.label}</span>;
+}
+
+function BuiltinTip({ t }) {
+  return (
+    <div className="tipcard">
+      <div className="tiphead"><b>{t.title}</b><EffortTag kind={t.effort} /></div>
+      <p>{t.body}</p>
+      {t.links && t.links.length > 0 && (
+        <p className="tiplinks">
+          {t.links.map((l) => (
+            <a key={l.href} className="ilink" href={l.href} target="_blank" rel="noopener noreferrer nofollow">{l.label} ↗</a>
+          ))}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function UserTip({ t, mine, myVote, onVote, onEdit, onDelete, admin, onHide }) {
+  const [why, setWhy] = useState(false);
+  const [reason, setReason] = useState("");
+  return (
+    <div className={`tipcard user${t.hidden ? " hid" : ""}`}>
+      <div className="tiphead">
+        <b>{t.title}</b>
+        <span className="eff who">{t.nick ? `${t.nick} 님` : "익명"}</span>
+        {mine && <span className="eff mine">내 글</span>}
+        {t.hidden && <span className="eff bad">가려짐</span>}
+      </div>
+      <p>{t.body}</p>
+      <div className="tipfoot">
+        <button className={myVote === 1 ? "vt on" : "vt"} onClick={() => onVote(t, myVote === 1 ? 0 : 1)}>
+          추천{t.up > 0 ? ` ${t.up}` : ""}
+        </button>
+        <button className={myVote === -1 ? "vt bad on" : "vt bad"}
+          onClick={() => { if (myVote === -1) onVote(t, 0); else setWhy(true); }}>
+          비추천{t.down > 0 ? ` ${t.down}` : ""}
+        </button>
+        {mine && <button className="vt plain" onClick={() => onEdit(t)}>고치기</button>}
+        {mine && <button className="vt plain" onClick={() => onDelete(t)}>삭제</button>}
+        {admin && (
+          <button className="vt plain" onClick={() => onHide(t, !t.hidden)}>
+            {t.hidden ? "다시 보이기" : "가리기"}
+          </button>
+        )}
+      </div>
+      {why && (
+        <div className="whybox">
+          <span className="fld-l">어디가 잘못됐나요?<em className="fld-h">관리자가 보고 가릴지 판단합니다</em></span>
+          <textarea className="in" rows={2} value={reason} maxLength={300} onChange={(e) => setReason(e.target.value)}
+            placeholder="예: 지금은 없어진 제도입니다 / 사실과 다릅니다 / 광고입니다" />
+          <div className="cact">
+            <button className="btn sm" disabled={reason.trim().length < 4}
+              onClick={() => { onVote(t, -1, reason); setWhy(false); setReason(""); }}>비추천 보내기</button>
+            <button className="btn sm" onClick={() => { setWhy(false); setReason(""); }}>취소</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TipForm({ draft, setDraft, onSave, onCancel, busy, err }) {
+  const problem = tipProblem(cleanTip(draft));
+  const set = (k) => (e) => setDraft({ ...draft, [k]: e.target.value });
+  return (
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <span className="eyebrow">{draft.id ? "고치기" : "올리기"}</span>
+          <h2>{draft.id ? "꿀팁 고치기" : "내가 아끼는 방법"}</h2>
+        </div>
+      </div>
+      <p className="mut sm">
+        실제로 해 본 방법을 적어 주세요. 금액은 상품과 시점마다 달라지니 <b>어떻게 하는지</b>를 적는 쪽이 오래 쓰입니다.
+        제휴 링크가 들어간 글은 올라가지 않습니다.
+      </p>
+      <div className="grid">
+        <Field label="어떤 지출에 쓰나요?" hint="항목 이름에 이 말이 있으면 자동으로 붙습니다">
+          <input className="in" value={draft.keywords || ""} maxLength={TIP_LIMITS.keywords}
+            onChange={set("keywords")} placeholder="통신비, 휴대폰" />
+        </Field>
+        <Field label="표시할 이름" hint="비워 두면 익명">
+          <input className="in" value={draft.nick || ""} maxLength={TIP_LIMITS.nick} onChange={set("nick")} placeholder="익명" />
+        </Field>
+        <Field label="제목" wide>
+          <input className="in" value={draft.title || ""} maxLength={TIP_LIMITS.title}
+            onChange={set("title")} placeholder="가족 결합을 풀고 각자 알뜰폰으로" />
+        </Field>
+        <Field label="어떻게 하는지" hint={`${String(draft.body || "").length} / ${TIP_LIMITS.body}자`} wide>
+          <textarea className="in" rows={5} value={draft.body || ""} maxLength={TIP_LIMITS.body} onChange={set("body")}
+            placeholder="순서대로 적어 주세요. 무엇을 확인하고, 어디에서 신청하고, 무엇을 주의해야 하는지." />
+        </Field>
+      </div>
+      {(err || problem) && <div className="wtip bad">{err || problem}</div>}
+      <div className="cact">
+        <button className="btn primary" disabled={!!problem || busy} onClick={onSave}>
+          {busy ? "올리는 중…" : draft.id ? "고친 내용 저장" : "올리기"}
+        </button>
+        <button className="btn" onClick={onCancel}>취소</button>
+      </div>
+    </section>
+  );
+}
+
+function SaveTab({ plan, conn, unit, setTab }) {
+  const [tips, setTips] = useState([]);
+  const [votes, setVotes] = useState({});
+  const [admin, setAdmin] = useState(false);
+  const [reports, setReports] = useState([]);
+  const [showReports, setShowReports] = useState(false);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const [del, setDel] = useState(null);
+
+  const writable = canWrite(conn);
+  const local = !canRead(conn);
+
+  const reload = useCallback(async () => {
+    try {
+      const [list, mine] = await Promise.all([listTips(conn), myVotes(conn)]);
+      setTips(list); setVotes(mine);
+    } catch (e) { setErr(e.message || "꿀팁을 불러오지 못했습니다."); }
+  }, [conn]);
+
+  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    let alive = true;
+    isAdmin(conn).then((a) => { if (alive) setAdmin(a); }).catch(() => {});
+    return () => { alive = false; };
+  }, [conn]);
+
+  const outs = useMemo(
+    () => (plan.items || []).filter((i) => i.flow === "out" && i.kind !== "oneoff" && String(i.name || "").trim()),
+    [plan.items]
+  );
+
+  /* 항목별로 기본 팁 + 사용자 꿀팁을 모읍니다. 같은 분류가 두 번 나오지 않게 합니다. */
+  const matched = useMemo(() => {
+    const seen = new Set();
+    const used = new Set();
+    const rows = [];
+    for (const it of outs) {
+      const bts = tipsFor(it.name);
+      const uts = tips.filter((t) => tipKeyHit(t, it.name));
+      if (!bts.length && !uts.length) continue;
+      const fresh = bts.filter((b) => !seen.has(b.id));
+      fresh.forEach((b) => seen.add(b.id));
+      uts.forEach((u) => used.add(u.id));
+      rows.push({ item: it, builtins: fresh, users: uts, dup: bts.length > 0 && fresh.length === 0 });
+    }
+    return { rows: rows.filter((r) => r.builtins.length || r.users.length), used };
+  }, [outs, tips]);
+
+  const others = useMemo(() => tips.filter((t) => !matched.used.has(t.id)), [tips, matched.used]);
+  const noMatch = useMemo(
+    () => outs.filter((it) => !tipsFor(it.name).length && !tips.some((t) => tipKeyHit(t, it.name))),
+    [outs, tips]
+  );
+
+  const doVote = async (t, v, reason) => {
+    setErr("");
+    if (!writable && !local) { setErr("추천하려면 로그인하세요."); return; }
+    try {
+      await vote(conn, t.id, v, reason);
+      await reload();
+    } catch (e) { setErr(e.message || "투표하지 못했습니다."); }
+  };
+
+  const save = async () => {
+    setErr(""); setBusy(true);
+    try {
+      const clean = cleanTip(draft);
+      const dup = findDuplicate(clean, draft.id ? tips.filter((t) => t.id !== draft.id) : tips);
+      if (dup) {
+        setErr(`이미 올라온 꿀팁과 거의 같습니다 — "${dup.title}". 다른 점이 있으면 그 부분만 적어 주세요.`);
+        setBusy(false); return;
+      }
+      if (draft.id) await editTip(conn, draft.id, clean);
+      else await addTip(conn, clean);
+      setDraft(null);
+      setMsg(local
+        ? "이 브라우저에 저장했습니다. 로그인하면 다른 사람에게도 보입니다."
+        : "올렸습니다. 같은 항목을 적어 둔 사람에게 바로 보입니다.");
+      await reload();
+    } catch (e) { setErr(e.message || "올리지 못했습니다."); }
+    setBusy(false);
+  };
+
+  const openReports = async () => {
+    setShowReports(true);
+    try { setReports(await listReports(conn)); }
+    catch (e) { setErr(e.message || "신고를 불러오지 못했습니다."); }
+  };
+
+  const hide = async (t, h) => {
+    try {
+      await setHidden(conn, t.id, h);
+      await reload();
+      if (showReports) setReports(await listReports(conn));
+    } catch (e) { setErr(e.message || "처리하지 못했습니다."); }
+  };
+
+  const myId = conn.user ? conn.user.id : "local";
+  const tipProps = {
+    onVote: doVote,
+    onEdit: (x) => { setMsg(""); setErr(""); setDraft({ ...x }); },
+    onDelete: (x) => setDel(x),
+    admin, onHide: hide,
+  };
+
+  return (
+    <>
+      <section className="card">
+        <div className="card-h">
+          <div>
+            <span className="eyebrow">SAVE</span>
+            <h2>아껴보기</h2>
+            <p className="sub">수입·지출에 적어 둔 항목 이름을 보고, 그 지출을 줄이는 방법을 모아 보여줍니다.</p>
+          </div>
+          {(writable || local) && !draft && (
+            <button className="btn sm primary" onClick={() => { setMsg(""); setErr(""); setDraft({ keywords: "", title: "", body: "", nick: "" }); }}>
+              꿀팁 올리기
+            </button>
+          )}
+        </div>
+
+        <p className="mut sm">
+          줄일 곳은 커피값이 아니라 <b>매달 자동으로 빠져나가는 고정비</b>입니다.
+          한 번 갈아타면 다음 달부터 계속 줄어드는 항목을 먼저 보세요.{" "}
+          <a className="ilink" href="/guide/spending-habits">읽어보기</a>
+        </p>
+
+        {outs.length === 0 && (
+          <div className="wtip">
+            아직 매달 나가는 지출이 없습니다. 항목을 넣으면 그 이름에 맞는 방법을 찾아 줍니다.{" "}
+            <button className="btn sm" onClick={() => setTab("items")}>지출 넣으러 가기</button>
+          </div>
+        )}
+        {local && (
+          <div className="wtip">
+            지금 올리는 꿀팁은 이 브라우저에만 저장됩니다. 로그인하면 다른 사람에게도 보이고, 다른 사람의 꿀팁도 받아옵니다.{" "}
+            <button className="btn sm" onClick={() => setTab("conn")}>계정 열기</button>
+          </div>
+        )}
+        {msg && <div className="wtip">{msg}</div>}
+        {err && !draft && <div className="wtip bad">{err}</div>}
+      </section>
+
+      {draft && (
+        <TipForm draft={draft} setDraft={setDraft} onSave={save} busy={busy} err={err}
+          onCancel={() => { setDraft(null); setErr(""); }} />
+      )}
+
+      {matched.rows.map(({ item, builtins, users, dup }) => (
+        <section className="card" key={item.id}>
+          <div className="card-h">
+            <div>
+              <span className="eyebrow">내 항목</span>
+              <h2>{item.name}</h2>
+              <p className="sub">
+                {money(num(item.amount), unit)} · {(FREQ.find((f) => f.v === item.freq) || FREQ[0]).label}
+              </p>
+            </div>
+          </div>
+          {dup && <p className="mut sm">위에 나온 항목과 같은 분류입니다. 방법은 위를 보세요.</p>}
+          {builtins.map((b) => (
+            <div className="tipgroup" key={b.id}>
+              <span className="eyebrow">{b.headline}</span>
+              {b.tips.map((t) => <BuiltinTip key={t.title} t={t} />)}
+            </div>
+          ))}
+          {users.length > 0 && (
+            <div className="tipgroup">
+              <span className="eyebrow">쓰는 사람들이 올린 방법</span>
+              {users.map((t) => (
+                <UserTip key={t.id} t={t} mine={t.userId === myId} myVote={votes[t.id] || 0} {...tipProps} />
+              ))}
+            </div>
+          )}
+        </section>
+      ))}
+
+      {noMatch.length > 0 && (
+        <section className="card">
+          <div className="card-h">
+            <div>
+              <span className="eyebrow">아직 방법이 없는 항목</span>
+              <h2>{noMatch.length}개</h2>
+            </div>
+          </div>
+          <p className="mut sm">
+            {noMatch.map((i) => i.name).join(", ")} — 이 항목을 줄여 본 적이 있으면 올려 주세요.
+            다음 사람이 같은 이름을 적었을 때 바로 보입니다.
+          </p>
+        </section>
+      )}
+
+      {others.length > 0 && (
+        <section className="card">
+          <div className="card-h">
+            <div>
+              <span className="eyebrow">COMMUNITY</span>
+              <h2>다른 사람의 꿀팁 보기</h2>
+              <p className="sub">내 항목에는 안 걸렸지만, 쓸 만하다고 추천받은 방법 {others.length}개</p>
+            </div>
+          </div>
+          {(showAll ? others : others.slice(0, 3)).map((t) => (
+            <UserTip key={t.id} t={t} mine={t.userId === myId} myVote={votes[t.id] || 0} {...tipProps} />
+          ))}
+          {others.length > 3 && (
+            <button className="btn sm" onClick={() => setShowAll(!showAll)}>
+              {showAll ? "접기" : `${others.length - 3}개 더 보기`}
+            </button>
+          )}
+        </section>
+      )}
+
+      {admin && (
+        <section className="card">
+          <div className="card-h">
+            <div>
+              <span className="eyebrow">관리자</span>
+              <h2>신고 보기</h2>
+              <p className="sub">비추천에 적힌 사유를 모아 봅니다. 사유는 글쓴이에게 보이지 않습니다.</p>
+            </div>
+            {!showReports && <button className="btn sm" onClick={openReports}>불러오기</button>}
+          </div>
+          {showReports && (reports.length === 0 ? (
+            <p className="mut sm">사유가 적힌 비추천이 없습니다.</p>
+          ) : reports.map((r) => (
+            <div className="tipcard user" key={r.id}>
+              <div className="tiphead">
+                <b>{r.title}</b>
+                <span className="eff bad">비추천 {r.down}</span>
+                {r.hidden && <span className="eff bad">가려짐</span>}
+              </div>
+              <ul className="reasons">{r.reasons.map((x, i) => <li key={i}>{x.reason}</li>)}</ul>
+              <div className="tipfoot">
+                <button className="vt plain" onClick={() => hide({ id: r.id }, !r.hidden)}>
+                  {r.hidden ? "다시 보이기" : "가리기"}
+                </button>
+              </div>
+            </div>
+          )))}
+        </section>
+      )}
+
+      <Confirm open={!!del} name={del ? del.title : ""} kind="꿀팁"
+        onCancel={() => setDel(null)}
+        onConfirm={async () => {
+          const t = del; setDel(null);
+          try { await removeTip(conn, t.id); await reload(); }
+          catch (e) { setErr(e.message || "삭제하지 못했습니다."); }
+        }} />
+    </>
+  );
+}
 
 function ItemsTab({ plan, up, unit }) {
   const [edit, setEdit] = useState(null);
@@ -3831,6 +4356,36 @@ export function Style() {
   font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap;flex:none}
 .wizbtn:hover{background:#0B4C56;border-color:#0B4C56}
 .wizbtn svg{flex:none}
+/* 아껴보기 */
+.tipgroup{margin-top:14px}
+.tipgroup>.eyebrow{display:block;margin-bottom:8px;color:var(--deep)}
+.tipcard{border:1px solid var(--line2);border-radius:10px;padding:12px 14px;margin-bottom:8px;background:#FBFCFC}
+.tipcard.user{border-left:3px solid var(--deep)}
+.tipcard.hid{opacity:.55}
+.tiphead{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:5px}
+.tiphead b{font-size:14.5px;line-height:1.45}
+.tipcard p{margin:0;font-size:13.5px;line-height:1.65;color:var(--ink2)}
+.eff{flex:none;font-size:11px;padding:2px 7px;border-radius:999px;border:1px solid var(--line);
+  color:var(--ink3);background:var(--card);white-space:nowrap}
+.eff.once{border-color:#A8CDB8;color:var(--pos)}
+.eff.swap{border-color:#A6C6CC;color:var(--deep)}
+.eff.habit{border-color:#DFCB94;color:var(--warn)}
+.eff.who{border-style:dashed}
+.eff.mine{border-color:var(--deep);color:var(--deep)}
+.eff.bad{border-color:#E0AFAB;color:var(--bad)}
+.tipfoot{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.vt{font:inherit;font-size:12px;padding:4px 10px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line);background:var(--card);color:var(--ink2)}
+.vt:hover{border-color:var(--deep);color:var(--deep)}
+.vt.on{background:var(--deep);border-color:var(--deep);color:#fff}
+.vt.bad.on{background:var(--bad);border-color:var(--bad);color:#fff}
+.vt.plain{border-color:transparent;background:transparent;color:var(--ink3);text-decoration:underline}
+.whybox{margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:9px}
+.whybox textarea{margin-top:6px}
+textarea.in{resize:vertical;line-height:1.6}
+.reasons{margin:8px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:var(--ink2)}
+.reasons li{margin:3px 0}
+.tiplinks{margin-top:8px;display:flex;flex-wrap:wrap;gap:12px}
 .guidebtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);
   background:#fff;color:var(--ink2);border-radius:20px;padding:7px 14px;
   font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap;flex:none;text-decoration:none}
@@ -3917,6 +4472,29 @@ export function Style() {
 .icon{background:none;border:0;font-size:15px;cursor:pointer;color:var(--ink3);padding:4px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 
+.gaps{background:var(--card);border:1px solid var(--line);border-radius:4px;margin-bottom:12px;overflow:hidden}
+.gaps.warn{border-color:#E4D4A0}
+.gaps.ok{display:flex;align-items:center;gap:10px;padding:11px 15px;
+  background:var(--okbg);border-color:#BFD6CC}
+.g-head{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;
+  padding:11px 15px;font:inherit;text-align:left;cursor:pointer}
+.gaps.warn .g-head{background:var(--warnbg)}
+.g-dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--ink3)}
+.g-dot.warn{background:#C99A1F} .g-dot.mild{background:var(--deep)} .g-dot.ok{background:var(--pos)}
+.g-text{flex:1;font-size:12.5px;line-height:1.6;color:var(--ink2)}
+.g-text b{color:var(--ink)}
+.g-toggle{flex:none;font-size:12px;color:var(--deep);font-weight:500;white-space:nowrap}
+.g-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.g-list li{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;
+  padding:11px 15px;border-bottom:1px solid var(--line2)}
+.g-list li:last-child{border-bottom:0}
+.g-list li>div{flex:1}
+.g-list b{font-size:13.5px;font-weight:600}
+.g-list em{font-style:normal;font-size:10px;margin-left:7px;padding:1px 6px;border-radius:2px;
+  background:#EEF2F1;color:var(--ink3);vertical-align:1px}
+.g-list li.must em{background:var(--warnbg);color:var(--warn)}
+.g-list p{margin:4px 0 0;font-size:12.5px;line-height:1.6;color:var(--ink2)}
+
 .floorhint{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
   background:var(--card);border:1px solid var(--line);border-left:3px solid var(--deep);
   border-radius:4px;padding:11px 15px;margin-bottom:12px}
@@ -3930,6 +4508,11 @@ export function Style() {
 .verdict.ok{background:var(--okbg);border-color:#BFD6CC}
 .verdict.warn{background:var(--warnbg);border-color:#E4D4A0}
 .verdict.bad{background:var(--badbg);border-color:#E3BDB8}
+.verdict.stale{background:#F3F4F2;border-color:var(--line);border-style:dashed}
+.verdict.stale strong{color:var(--ink3)}
+.v-warn{display:block;margin-top:7px;padding-top:7px;border-top:1px solid var(--line);
+  font-size:12.5px;color:var(--warn)}
+.v-warn b{color:var(--ink)}
 
 /* 시그니처 스트립 */
 .strip-card{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:14px 16px 10px;margin-bottom:14px}
