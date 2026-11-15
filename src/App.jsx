@@ -2550,9 +2550,15 @@ function BuiltinTip({ t }) {
       <p>{t.body}</p>
       {t.links && t.links.length > 0 && (
         <p className="tiplinks">
-          {t.links.map((l) => (
-            <a key={l.href} className="ilink" href={l.href} target="_blank" rel="noopener noreferrer nofollow">{l.label} ↗</a>
-          ))}
+          {t.links.map((l) => {
+            const out = /^https?:/i.test(l.href);
+            return (
+              <a key={l.href} className="ilink" href={l.href}
+                {...(out ? { target: "_blank", rel: "noopener noreferrer nofollow" } : {})}>
+                {l.label}{out ? " ↗" : " →"}
+              </a>
+            );
+          })}
         </p>
       )}
     </div>

@@ -306,6 +306,14 @@ export const SAVE_TIPS = [
       },
       {
         effort: "once",
+        title: "뒷면 성분표 읽는 법 익히기",
+        body:
+          "1회 제공량, 1일 기준치, 반올림된 0 — 이 세 가지만 알면 같은 돈으로 더 나은 걸 " +
+          "고르게 됩니다. 끊는 것보다 고르는 쪽이 지켜집니다.",
+        links: [{ label: "성분표 읽는 법", href: "/guide/food-label" }],
+      },
+      {
+        effort: "once",
         title: "묶음 할인에 속지 않기",
         body: "단위당 가격을 보세요. 많이 사서 버리면 할인이 아닙니다.",
       },
