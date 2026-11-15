@@ -19,6 +19,7 @@
  * stage 는 아래 STAGES 의 번호입니다. 빠뜨리면 '그 밖에'로 갑니다.
  * order 는 같은 단계 안에서의 순서이고, 작은 값이 먼저 나옵니다.
  * draft: true 를 넣으면 목록에도 사이트에도 나오지 않습니다.
+ * 파일 이름을 밑줄로 시작해도(_메모.md) 글로 치지 않습니다.
  *
  * 본문에서 쓸 수 있는 것
  *   ## 소제목          한 단계짜리 제목만 있습니다 (### 는 없습니다)
@@ -89,6 +90,8 @@ const files = import.meta.glob("./guides/*.md", { query: "?raw", import: "defaul
 
 export const GUIDES = Object.entries(files)
   .map(([path, raw]) => parse(raw, path.replace(/^.*\//, "").replace(/\.md$/, "")))
+  /* 밑줄로 시작하는 파일과 README 는 글이 아닙니다 */
+  .filter((g) => !g.slug.startsWith("_") && g.slug.toLowerCase() !== "readme")
   .filter((g) => !g.draft)
   .sort((a, b) => (a.stage === b.stage ? a.order - b.order : a.stage.localeCompare(b.stage)));
 
