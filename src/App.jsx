@@ -450,6 +450,7 @@ function emptyPlan() {
     },
     items: [],
     bigs: [],
+    savings: [],
     scenarios: [{ id: "base", name: "기본", color: SC_COLORS[0], note: "", off: {}, ov: {}, inFactor: 100, outFactor: 100 }],
     shown: ["base"],
   };
@@ -504,6 +505,52 @@ function seedCatalog() {
     ],
     updatedAt: null,
   };
+}
+
+/* ------------------------------------------------------------------
+   저축 (적금·예금)
+   적금 단리: 매달 넣은 돈이 남은 개월 수만큼 이자를 받습니다.
+     이자 = 월납입액 × (연이율/12) × n(n+1)/2
+   예금 단리: 원금 × 연이율 × (개월/12)
+   예금 월복리: 원금 × ((1 + 연이율/12)^n − 1)
+   이자소득세 15.4% (소득세 14% + 지방소득세 1.4%) 를 떼고 받습니다.
+------------------------------------------------------------------- */
+const TAX_RATE = 15.4;
+
+const SAVE_KINDS = [
+  { v: "regular", label: "적금", hint: "매달 일정액을 넣고 만기에 찾습니다" },
+  { v: "deposit", label: "예금", hint: "목돈을 한 번에 맡기고 만기에 찾습니다" },
+];
+
+function savingSchedule(sv) {
+  const n = Math.max(1, Math.round(num(sv.months)));
+  const r = num(sv.apr) / 100 / 12;
+  const amt = num(sv.amount);
+  const events = [];
+  let principal = 0;
+  let interest = 0;
+
+  if (sv.kind === "deposit") {
+    principal = amt;
+    if (amt > 0) events.push({ month: sv.startMonth, amount: amt, flow: "out", tag: "예치" });
+    interest = sv.compound === "monthly"
+      ? amt * (Math.pow(1 + r, n) - 1)
+      : amt * (num(sv.apr) / 100) * (n / 12);
+  } else {
+    principal = amt * n;
+    for (let i = 0; i < n; i++) {
+      if (amt > 0) events.push({ month: addM(sv.startMonth, i), amount: amt, flow: "out", tag: "납입" });
+    }
+    interest = amt * r * (n * (n + 1) / 2);
+  }
+
+  const tax = interest * (num(sv.taxRate) / 100);
+  const net = interest - tax;
+  const maturity = addM(sv.startMonth, n);
+  const payout = principal + net;
+  if (payout > 0) events.push({ month: maturity, amount: payout, flow: "in", tag: "만기 수령" });
+
+  return { events, principal, interest, tax, net, payout, maturity, n };
 }
 
 /* ---------------- 계산 엔진 ---------------- */
@@ -629,6 +676,24 @@ function compute(plan, sc) {
     }
   }
 
+  /* 저축 */
+  let saveOut = 0, saveIn = 0, saveInterest = 0;
+  const saveMonths = new Set();
+  for (const raw of (plan.savings || [])) {
+    if (sc.off && sc.off[raw.id]) continue;
+    const sv = applyOv(raw, sc);
+    const sch = savingSchedule(sv);
+    saveInterest += sch.net;
+    for (const ev of sch.events) {
+      const row = at(ev.month);
+      if (!row) continue;
+      if (ev.flow === "in") { row.inflow += ev.amount; saveIn += ev.amount; }
+      else { row.outflow += ev.amount; saveOut += ev.amount; }
+      row.notes.push({ name: `${sv.name || "저축"} · ${ev.tag}`, amount: ev.amount, flow: ev.flow, saving: true });
+      saveMonths.add(ev.month);
+    }
+  }
+
   /* 잔고 굴리기 */
   let bal = num(opening);
   let min = Infinity, minMonth = null, breach = null, negative = null;
@@ -645,11 +710,14 @@ function compute(plan, sc) {
   }
 
   return {
-    months, rows, bigMonths, bigDetail,
+    months, rows, bigMonths, bigDetail, saveMonths,
     metrics: {
       end: bal, min, minMonth, breach, negative,
       totalIn, totalOut, interest, tail,
       avgNet: rows.length ? (totalIn - totalOut) / rows.length : 0,
+      /* 저축으로 묶인 돈을 빼기 전, 매달 실제로 남는 돈 */
+      avgFree: rows.length ? (totalIn - saveIn - (totalOut - saveOut)) / rows.length : 0,
+      saveOut, saveIn, saveInterest,
     },
   };
 }
@@ -712,6 +780,10 @@ function extendHorizon(plan) {
     const sch = bigSchedule(b);
     const last = sch.lastMonth || b.month;
     need = Math.max(need, diffM(plan.settings.startMonth, last) + 13);
+  }
+  for (const sv of (plan.savings || [])) {
+    const sch = savingSchedule(sv);
+    need = Math.max(need, diffM(plan.settings.startMonth, sch.maturity) + 1);
   }
   if (need <= num(plan.settings.horizon)) return plan;
   return { ...plan, settings: { ...plan.settings, horizon: Math.min(need, 600) } };
@@ -1166,6 +1238,7 @@ function Cashflow() {
   function migrate(p) {
     const base = emptyPlan();
     const merged = { ...base, ...p, settings: { ...base.settings, ...(p.settings || {}) } };
+    if (!Array.isArray(merged.savings)) merged.savings = [];
     if (!merged.scenarios || !merged.scenarios.length) merged.scenarios = base.scenarios;
     merged.scenarios = merged.scenarios.map((s) => ({ off: {}, ov: {}, inFactor: 100, outFactor: 100, ...s }));
     if (!merged.shown || !merged.shown.length) merged.shown = [merged.scenarios[0].id];
@@ -1296,6 +1369,7 @@ function Cashflow() {
           ["dash", "대시보드"],
           ["items", "수입·지출"],
           ["bigs", "큰 지출"],
+          ["save", "저축"],
           ["scen", "시나리오"],
           ["cat", "상품 카탈로그"],
           ["snap", "스냅샷"],
@@ -1330,6 +1404,7 @@ function Cashflow() {
         )}
         {tab === "items" && <ItemsTab plan={plan} up={up} unit={unit} />}
         {tab === "bigs" && <BigsTab plan={plan} up={up} unit={unit} catalog={catalog} results={results} primary={primary} />}
+        {tab === "save" && <SavingsTab plan={plan} up={up} unit={unit} results={results} primary={primary} />}
         {tab === "scen" && <ScenTab plan={plan} up={up} unit={unit} results={results} />}
         {tab === "cat" && <CatalogTab catalog={catalog} saveCatalog={saveCatalog} />}
         {tab === "snap" && <SnapTab plan={plan} setPlan={setPlan} snaps={snaps} saveSnaps={saveSnaps} results={results} primary={primary} unit={unit} />}
@@ -1446,7 +1521,7 @@ function Wizard({ plan, setPlan, onClose }) {
     }
     return {
       settings: { startMonth: d.startMonth, horizon: num(d.horizon), opening: num(d.opening), floor: num(d.floor), unit: plan.settings.unit },
-      items, bigs,
+      items, bigs, savings: [],
       scenarios: [{ id: "base", name: "기본", color: SC_COLORS[0], note: "", off: {}, ov: {}, inFactor: 100, outFactor: 100 }],
       shown: ["base"],
     };
@@ -2725,6 +2800,325 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
   );
 }
 
+/* ---------------- 저축 탭 ---------------- */
+
+/* 안전선을 지키면서 매달 넣을 수 있는 최대 금액을 찾습니다.
+   단, 전부 넣으라고 권하지는 않습니다. 아래 CARE_SHARE 를 남겨 둡니다. */
+const CARE_SHARE = 0.2;
+
+function maxMonthlySaving(plan, sc, draft) {
+  const fits = (amt) => {
+    const p2 = JSON.parse(JSON.stringify(plan));
+    p2.savings = [...(p2.savings || []), { ...draft, id: "probe", amount: amt }];
+    return verdictOf(extendHorizon(p2), sc).ok;
+  };
+  if (!fits(10000)) return 0;
+  let lo = 10000, hi = 10000;
+  while (hi < 50000000 && fits(hi * 2)) hi *= 2;
+  hi = Math.min(hi * 2, 50000000);
+  for (let i = 0; i < 24; i++) {
+    const mid = Math.floor((lo + hi) / 2 / 10000) * 10000;
+    if (mid <= lo) break;
+    if (fits(mid)) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+
+function SavingsTab({ plan, up, unit, results, primary }) {
+  const [edit, setEdit] = useState(null);
+  const [del, setDel] = useState(null);
+
+  const list = plan.savings || [];
+  const res = results[primary.id];
+  const m = res.metrics;
+
+  const blank = () => ({
+    id: uid(), kind: "regular", name: "",
+    amount: 0, startMonth: plan.settings.startMonth,
+    months: 12, apr: 0, compound: "simple", taxRate: TAX_RATE,
+  });
+
+  const save = (sv) => {
+    up((p) => {
+      p.savings = p.savings || [];
+      const i = p.savings.findIndex((x) => x.id === sv.id);
+      if (i >= 0) p.savings[i] = sv; else p.savings.push(sv);
+    });
+    setEdit(null);
+  };
+
+  const totals = list.reduce((a, sv) => {
+    const sch = savingSchedule(sv);
+    a.monthly += sv.kind === "regular" ? num(sv.amount) : 0;
+    a.principal += sch.principal;
+    a.net += sch.net;
+    a.payout += sch.payout;
+    return a;
+  }, { monthly: 0, principal: 0, net: 0, payout: 0 });
+
+  const free = m.avgFree;
+  const leftover = free - totals.monthly;
+
+  return (
+    <>
+      <section className="card">
+        <div className="card-h">
+          <div>
+            <span className="eyebrow en">FREE CASH FLOW</span>
+            <h2>매달 남는 돈</h2>
+          </div>
+          <button className="btn sm primary" onClick={() => setEdit(blank())}>저축 추가</button>
+        </div>
+
+        <div className="sumbar">
+          <div><span className="eyebrow">저축 전 월평균 여유</span>
+            <b className={`mono ${free < 0 ? "neg" : "pos"}`}>{money(free, unit)}</b></div>
+          <div><span className="eyebrow">지금 넣고 있는 적금</span>
+            <b className="mono">{money(totals.monthly, unit)}</b></div>
+          <div><span className="eyebrow">그러고도 남는 돈</span>
+            <b className={`mono ${leftover < 0 ? "neg" : ""}`}>{money(leftover, unit)}</b></div>
+          <p className="mut sm">
+            수입에서 지출을 뺀 금액의 월평균입니다. 큰 지출의 상환액도 지출에 들어가 있습니다.
+          </p>
+        </div>
+
+        {free > 0 && leftover > 0 && (
+          <div className="wtip">
+            매달 <b>{money(leftover, unit)}</b>이 통장에 그냥 쌓이고 있습니다.
+            쓸 일이 정해지지 않은 돈이라면 적금으로 묶어두는 편이 낫습니다.
+            다만 전부 넣지는 마세요 — 아래를 읽어보세요.
+          </div>
+        )}
+
+        {free > 0 && leftover <= 0 && totals.monthly > 0 && (
+          <div className="wtip bad">
+            여유보다 많이 넣고 있습니다. 저축이 생활비를 밀어내면 결국 중도해지하게 됩니다.
+            금액을 줄이거나 기간을 늘리는 편이 낫습니다.
+          </div>
+        )}
+
+        {free <= 0 && (
+          <div className="wtip bad">
+            지금은 매달 돈이 모자랍니다. 저축보다 <b>수입·지출</b>을 먼저 맞추는 게 순서입니다.
+          </div>
+        )}
+
+        <div className="carenote">
+          <span className="eyebrow">모으기만 하면 지칩니다</span>
+          <p>
+            남는 돈을 전부 적금에 넣으면 숫자는 좋아 보이지만 오래 못 갑니다.
+            참다가 한 번에 무너지는 쪽이 조금씩 쓰는 쪽보다 결국 더 많이 씁니다.
+          </p>
+          <p>
+            <b>여유의 {Math.round(CARE_SHARE * 100)}% 정도는 나를 위해 남겨두세요.</b>{" "}
+            취미, 운동, 친구 만나기, 혼자 쉬는 시간처럼 돈이 들더라도 버티게 해주는 것들입니다.
+            저축은 생활을 쥐어짜서가 아니라 <b>남는 돈에서</b> 하는 것이 오래갑니다.
+          </p>
+          {free > 0 && (
+            <p className="mono carefig">
+              이 계획이라면 매달 <b>{money(free * CARE_SHARE, unit)}</b> 정도는 나를 위해 써도 괜찮습니다.
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-h">
+          <div><span className="eyebrow en">SAVINGS</span><h2>적금·예금 {list.length}개</h2></div>
+        </div>
+
+        {list.length === 0 ? (
+          <div className="empty inner">
+            <h3>아직 등록한 저축이 없습니다.</h3>
+            <p>적금이나 예금을 넣으면 납입액이 매달 빠지고, 만기에 이자까지 더해 돌아오는 것으로 계산합니다.</p>
+          </div>
+        ) : (
+          <>
+            <div className="tablewrap">
+              <table className="tbl">
+                <thead>
+                  <tr><th>이름</th><th>종류</th><th>기간</th><th className="r">금액</th><th className="r">연이율</th>
+                    <th className="r">세후 이자</th><th className="r">만기 수령</th><th /></tr>
+                </thead>
+                <tbody>
+                  {list.map((sv) => {
+                    const sch = savingSchedule(sv);
+                    return (
+                      <tr key={sv.id}>
+                        <td><b>{sv.name || <span className="mut">(이름 없음)</span>}</b></td>
+                        <td className="mut">{sv.kind === "deposit" ? "예금" : "적금"}</td>
+                        <td className="mono mut">{labelYM(sv.startMonth)} ~ {labelYM(sch.maturity)}</td>
+                        <td className="r mono">{money(sv.amount, unit)}{sv.kind === "regular" ? "/월" : ""}</td>
+                        <td className="r mono">{num(sv.apr) ? `${sv.apr}%` : "—"}</td>
+                        <td className="r mono pos">{money(sch.net, unit)}</td>
+                        <td className="r mono b">{money(sch.payout, unit)}</td>
+                        <td className="r nowrap">
+                          <button className="link" onClick={() => setEdit({ ...sv })}>수정</button>
+                          <button className="link del" onClick={() => setDel(sv)}>삭제</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="sum">
+                    <td colSpan={3}>합계</td>
+                    <td className="r mono">{money(totals.monthly, unit)}/월</td>
+                    <td />
+                    <td className="r mono pos">{money(totals.net, unit)}</td>
+                    <td className="r mono b">{money(totals.payout, unit)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            <p className="mut sm" style={{ marginTop: 10 }}>
+              만기에 받는 돈은 원금에 이자를 더하고 이자소득세 {TAX_RATE}%를 뺀 금액입니다.
+              비과세 상품이라면 편집에서 세율을 0으로 두세요.
+            </p>
+          </>
+        )}
+      </section>
+
+      <Confirm open={!!del} name={del && del.name} kind={del && del.kind === "deposit" ? "예금" : "적금"}
+        note="납입과 만기 수령이 현금흐름에서 빠집니다."
+        onCancel={() => setDel(null)}
+        onConfirm={() => { up((p) => { p.savings = p.savings.filter((x) => x.id !== del.id); }); setDel(null); }} />
+
+      {edit && (
+        <SavingEditor sv={edit} setSv={setEdit} plan={plan} sc={primary} unit={unit}
+          free={free} onCancel={() => setEdit(null)} onSave={() => save(edit)} />
+      )}
+    </>
+  );
+}
+
+function SavingEditor({ sv, setSv, plan, sc, unit, free, onCancel, onSave }) {
+  const sch = savingSchedule(sv);
+  const [maxAmt, setMaxAmt] = useState(null);
+  const regular = sv.kind !== "deposit";
+
+  const findMax = () => {
+    const others = { ...plan, savings: (plan.savings || []).filter((x) => x.id !== sv.id) };
+    setMaxAmt(maxMonthlySaving(others, sc, { ...sv, id: "probe" }));
+  };
+
+  /* 적금은 매달 버는 돈에서 냅니다. 안전선만 보면 모아둔 돈을 헐어
+     채우는 금액까지 "가능"으로 나오므로, 월 여유로 한 번 더 묶습니다. */
+  const flowCap = free > 0 ? free : 0;
+  const base = maxAmt === null ? null : Math.min(maxAmt, flowCap);
+  const safe = base === null ? null : Math.max(0, Math.floor(base * (1 - CARE_SHARE) / 10000) * 10000);
+  const limitedByFlow = maxAmt !== null && flowCap < maxAmt;
+
+  return (
+    <Modal title={regular ? "적금" : "예금"} wide onClose={onCancel}
+      footer={<>
+        <button className="btn" onClick={onCancel}>취소</button>
+        <button className="btn primary" onClick={onSave}>저장</button>
+      </>}>
+      <div className="grid">
+        <Field label="이름" wide>
+          <input className="in" value={sv.name} placeholder={regular ? "예: 비상금 적금" : "예: 전세자금 예금"}
+            onChange={(e) => setSv({ ...sv, name: e.target.value })} />
+        </Field>
+        <Field label="종류">
+          <select className="in" value={sv.kind} onChange={(e) => setSv({ ...sv, kind: e.target.value })}>
+            {SAVE_KINDS.map((k) => <option key={k.v} value={k.v}>{k.label}</option>)}
+          </select>
+        </Field>
+        <Field label={regular ? "월 납입액" : "예치 금액"}>
+          <NumIn value={sv.amount} step={100000} onChange={(v) => setSv({ ...sv, amount: num(v) })} suffix="원" comma />
+        </Field>
+        <Field label="시작 월">
+          <input className="in mono" type="month" value={sv.startMonth}
+            onChange={(e) => setSv({ ...sv, startMonth: e.target.value })} />
+        </Field>
+        <Field label="기간">
+          <NumIn value={sv.months} min={1} onChange={(v) => setSv({ ...sv, months: Math.max(1, num(v)) })} suffix="개월" />
+        </Field>
+        <Field label="연 이자율" hint="세전">
+          <NumIn value={sv.apr} step={0.1} onChange={(v) => setSv({ ...sv, apr: num(v) })} suffix="%" />
+        </Field>
+        {!regular && (
+          <Field label="이자 방식">
+            <select className="in" value={sv.compound} onChange={(e) => setSv({ ...sv, compound: e.target.value })}>
+              <option value="simple">단리</option>
+              <option value="monthly">월복리</option>
+            </select>
+          </Field>
+        )}
+        <Field label="이자소득세" hint="비과세면 0">
+          <NumIn value={sv.taxRate} step={0.1} onChange={(v) => setSv({ ...sv, taxRate: num(v) })} suffix="%" />
+        </Field>
+      </div>
+
+      {regular && (
+        <div className="calcbox">
+          <span className="eyebrow">얼마까지 넣을 수 있나</span>
+          {maxAmt === null ? (
+            <>
+              <p className="mut sm" style={{ margin: "6px 0 10px" }}>
+                지금 계획에서 안전선을 지키며 넣을 수 있는 최대 금액을 찾아 봅니다.
+              </p>
+              <button className="btn sm" onClick={findMax}>계산하기</button>
+            </>
+          ) : maxAmt === 0 ? (
+            <p className="mut" style={{ margin: "6px 0 0", fontSize: 13 }}>
+              지금은 여유가 없습니다. 적금을 넣으면 안전선이 깨집니다.
+            </p>
+          ) : (
+            <>
+              <ul className="mono">
+                <li><span>매달 남는 돈</span><b>{won(flowCap)}</b></li>
+                <li><span>안전선만 보면 최대</span><b>{won(maxAmt)}</b></li>
+                <li><span>권하는 금액</span><b className="pos">{won(safe)}</b></li>
+              </ul>
+              {limitedByFlow ? (
+                <p className="mut sm" style={{ marginTop: 8 }}>
+                  안전선만 따지면 {won(maxAmt)}까지 가능하지만, 그건 모아둔 돈을 헐어서 채우는 금액입니다.
+                  적금은 매달 버는 돈에서 내는 것이라 <b>월 여유 {won(flowCap)}</b>을 넘지 않게 잡았고,
+                  거기서 나를 위해 쓸 몫 {Math.round(CARE_SHARE * 100)}%를 남겼습니다.
+                  목돈을 묶어두려면 적금이 아니라 <b>예금</b>이 맞습니다.
+                </p>
+              ) : (
+                <p className="mut sm" style={{ marginTop: 8 }}>
+                  최대까지 넣으면 여유가 0이 됩니다. 나를 위해 쓸 몫 {Math.round(CARE_SHARE * 100)}%를 남긴
+                  금액을 권합니다. 모으는 일은 몇 년을 이어가야 하고, 숨 쉴 틈이 없으면 중간에 깨지기 마련입니다.
+                </p>
+              )}
+              {safe > 0 && (
+                <div className="row" style={{ marginTop: 10 }}>
+                  <button className="btn sm primary" onClick={() => setSv({ ...sv, amount: safe })}>권하는 금액으로</button>
+                  <button className="btn sm" onClick={() => setSv({ ...sv, amount: Math.floor(flowCap / 10000) * 10000 })}>여유 전부</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="calcbox">
+        <span className="eyebrow">만기에 받는 돈</span>
+        <ul className="mono">
+          <li><span>원금</span><b>{won(sch.principal)}</b></li>
+          <li><span>이자 (세전)</span><b>{won(sch.interest)}</b></li>
+          <li><span>이자소득세 {num(sv.taxRate)}%</span><b className="neg">− {won(sch.tax)}</b></li>
+          <li><span>세후 이자</span><b className="pos">{won(sch.net)}</b></li>
+          <li><span><b>만기 수령액</b></span><b>{won(sch.payout)}</b></li>
+          <li><span>만기</span><b>{longYM(sch.maturity)}</b></li>
+        </ul>
+        {regular && num(sv.apr) > 0 && (
+          <p className="mut sm" style={{ marginTop: 8 }}>
+            적금은 매달 넣은 돈이 남은 기간만큼만 이자를 받습니다. 그래서 연 {sv.apr}% 라도
+            실제로 붙는 이자는 원금의 {((sch.interest / Math.max(1, sch.principal)) * 100).toFixed(2)}% 입니다.
+            예금 금리와 그대로 비교하면 안 됩니다.
+          </p>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 /* ---------------- 시나리오 탭 ---------------- */
 function ScenTab({ plan, up, unit, results }) {
   const [openId, setOpenId] = useState(null);
@@ -2887,6 +3281,21 @@ function ScenEditor({ plan, up, sc, onClose }) {
           </div>
         );
       })}
+
+      {(plan.savings || []).length > 0 && (
+        <>
+          <h4 className="sub-h">저축 켜고 끄기</h4>
+          <div className="togglelist">
+            {plan.savings.map((sv) => (
+              <label key={sv.id} className={`chk pill${isOff(sv.id) ? " off" : ""}`}>
+                <input type="checkbox" checked={!isOff(sv.id)}
+                  onChange={(e) => patch((t) => { t.off = t.off || {}; if (e.target.checked) delete t.off[sv.id]; else t.off[sv.id] = true; })} />
+                {sv.name || (sv.kind === "deposit" ? "예금" : "적금")}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
 
       <h4 className="sub-h">수입·지출 항목 켜고 끄기</h4>
       <div className="togglelist">
@@ -3466,6 +3875,12 @@ export function Style() {
 .wtip{margin-top:14px;background:var(--okbg);border:1px solid #BFD6CC;border-radius:4px;
   padding:11px 14px;font-size:12.5px;color:var(--ink2);line-height:1.5}
 .wtip.bad{background:var(--warnbg);border-color:#E4D4A0}
+.carenote{margin-top:14px;background:#F6F2F7;border:1px solid #DED2E2;border-radius:4px;padding:14px 16px}
+.carenote .eyebrow{color:#6B4A66;font-weight:600;margin-bottom:6px}
+.carenote p{margin:0 0 8px;font-size:13px;line-height:1.7;color:var(--ink2)}
+.carenote p:last-child{margin:0}
+.carenote b{color:var(--ink)}
+.carefig{background:#fff;border-radius:3px;padding:8px 11px;font-size:12.5px!important}
 .wtip b{color:var(--ink)}
 
 .wverdict{display:flex;flex-direction:column;gap:3px;padding:14px 16px;border-radius:4px;border:1px solid}
