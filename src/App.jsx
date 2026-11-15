@@ -1353,6 +1353,16 @@ function Cashflow() {
             <span className="wizlabel">설정 마법사</span>
             <span className="wizlabel-sm">마법사</span>
           </button>
+          <a className="guidebtn" href="/guide" title="올바른 가계경제를 만드는 순서와 기준">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H5.5A1.5 1.5 0 0 1 4 15.5z"
+                stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinejoin="round" />
+              <path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h4.5a1.5 1.5 0 0 0 1.5-1.5z"
+                stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinejoin="round" />
+            </svg>
+            <span className="wizlabel">가계경제 가이드</span>
+            <span className="wizlabel-sm">가이드</span>
+          </a>
           <div className="topmeta">
             <span className={online ? "conn on" : "conn"} onClick={() => setTab("conn")} role="button" tabIndex={0}
               onKeyDown={(e) => { if (e.key === "Enter") setTab("conn"); }}>
@@ -3722,6 +3732,11 @@ export function Style() {
   font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap;flex:none}
 .wizbtn:hover{background:#0B4C56;border-color:#0B4C56}
 .wizbtn svg{flex:none}
+.guidebtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);
+  background:#fff;color:var(--ink2);border-radius:20px;padding:7px 14px;
+  font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap;flex:none;text-decoration:none}
+.guidebtn:hover{border-color:var(--deep);color:var(--deep)}
+.guidebtn svg{flex:none}
 .wizlabel-sm{display:none}
 .topright .stat-line{font-size:10.5px}
 .tagline{margin:1px 0 0;font-size:12px;color:var(--ink3);line-height:1.4}
@@ -4084,6 +4099,23 @@ export function Style() {
 .cta h3{font-size:21px;font-weight:700;letter-spacing:-.02em;margin:0 0 7px}
 .cta p{margin:0 0 18px;color:var(--ink2);font-size:14px}
 
+.path{display:flex;flex-direction:column;gap:30px}
+.stage-h{display:flex;gap:13px;align-items:flex-start;margin-bottom:13px}
+.stage-n{flex:none;width:28px;height:28px;border-radius:50%;background:var(--deep);color:#fff;
+  display:grid;place-items:center;font-size:13px;font-weight:600;
+  font-family:'IBM Plex Mono',monospace;margin-top:1px}
+.stage-h h3{font-size:17px;font-weight:600;letter-spacing:-.02em;margin:0 0 4px}
+.stage-h p{margin:0;font-size:13px;line-height:1.65;color:var(--ink2)}
+.stage{position:relative}
+.stage:not(:last-child)::after{content:"";position:absolute;left:14px;top:34px;bottom:-30px;
+  width:1px;background:var(--line);z-index:0}
+.stage>*{position:relative;z-index:1}
+.stage .glist{margin-left:41px}
+@media (max-width:640px){
+  .stage .glist{margin-left:0}
+  .stage:not(:last-child)::after{display:none}
+}
+
 .glist{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px}
 .gcard{display:block;background:var(--card);border:1px solid var(--line);border-radius:4px;
   padding:18px 20px;text-decoration:none;color:inherit}
@@ -4107,7 +4139,7 @@ export function Style() {
   .app{padding:12px}
   .top{align-items:center}
   .topright{gap:8px}
-  .wizbtn{padding:7px 11px}
+  .wizbtn,.guidebtn{padding:7px 11px}
   .wizlabel{display:none}
   .wizlabel-sm{display:inline}
   .topmeta{font-size:10px}

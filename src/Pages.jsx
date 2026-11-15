@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { GUIDES, PRIVACY, TERMS } from "./content.js";
+import { GUIDES, GUIDE_PATH, PRIVACY, TERMS } from "./content.js";
 import { SERVICE } from "./config.js";
 import { Style } from "./App.jsx";
 
@@ -246,17 +246,41 @@ export function AboutPage({ onHome }) {
 }
 
 export function GuideIndex({ onHome }) {
+  const byslug = (sl) => GUIDES.find((g) => g.slug === sl);
   return (
-    <PageShell title="가이드" onHome={onHome}
-      lead="앱이 계산에 쓰는 기준을 글로 풀었습니다. 숫자를 넣기 전에 읽으면 무엇을 넣어야 할지 분명해집니다.">
-      <div className="glist">
-        {GUIDES.map((g) => (
-          <a key={g.slug} className="gcard" href={`/guide/${g.slug}`}>
-            <h3>{g.title}</h3>
-            <p>{g.summary}</p>
-            <span className="gmore">읽기 →</span>
-          </a>
+    <PageShell title="올바른 가계경제 만들기" onHome={onHome}
+      lead="순서가 있습니다. 쓰는 돈을 알고, 무너지지 않을 선을 만들고, 남는 돈을 굴리고, 그다음에 큰 지출을 감당합니다. 이 도구가 계산에 쓰는 기준을 글로 풀었습니다.">
+      <div className="path">
+        {GUIDE_PATH.map((stage) => (
+          <section key={stage.step} className="stage">
+            <div className="stage-h">
+              <span className="stage-n">{stage.step}</span>
+              <div>
+                <h3>{stage.title}</h3>
+                <p>{stage.lead}</p>
+              </div>
+            </div>
+            <div className="glist">
+              {stage.slugs.map((sl) => {
+                const g = byslug(sl);
+                if (!g) return null;
+                return (
+                  <a key={sl} className="gcard" href={`/guide/${g.slug}`}>
+                    <h3>{g.title}</h3>
+                    <p>{g.summary}</p>
+                    <span className="gmore">읽기 →</span>
+                  </a>
+                );
+              })}
+            </div>
+          </section>
         ))}
+      </div>
+
+      <div className="cta">
+        <h3>읽었으면 재 보세요</h3>
+        <p>버는 돈과 쓰는 돈을 넣으면 앞으로의 잔고가 그려집니다.</p>
+        <a href="/" className="btn primary big" onClick={onHome}>계산해 보기</a>
       </div>
     </PageShell>
   );
@@ -272,14 +296,21 @@ export function GuidePage({ slug, onHome }) {
       </PageShell>
     );
   }
-  const others = GUIDES.filter((x) => x.slug !== slug);
+  /* 읽는 순서상 바로 다음 글을 먼저 보여줍니다 */
+  const order = GUIDE_PATH.flatMap((st) => st.slugs);
+  const at = order.indexOf(slug);
+  const rest = at >= 0 ? [...order.slice(at + 1), ...order.slice(0, at)] : order.filter((x) => x !== slug);
+  const others = rest.map((sl) => GUIDES.find((x) => x.slug === sl)).filter(Boolean);
   return (
     <PageShell title={g.title} lead={g.summary} onHome={onHome}>
       <Prose body={g.body} />
       <div className="gnext">
         <h4 className="sub-h">이어서 읽기</h4>
+        <p className="mut sm" style={{ margin: "0 0 12px" }}>
+          <a className="ilink" href="/guide">전체 순서 보기</a>
+        </p>
         <div className="glist">
-          {others.map((o) => (
+          {others.slice(0, 2).map((o) => (
             <a key={o.slug} className="gcard" href={`/guide/${o.slug}`}>
               <h3>{o.title}</h3>
               <p>{o.summary}</p>
