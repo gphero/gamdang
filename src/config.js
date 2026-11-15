@@ -36,7 +36,35 @@ if (SUPABASE_KEY && /^sb_secret_/.test(SUPABASE_KEY)) {
 export const SERVICE = {
   name: "감당할수있겠나!",
   tagline: "큰 지출을 감당할 수 있는지 미리 굴려보는 가계 현금흐름 예측 시스템",
-  url: "https://canyougetit.netlify.app",
+  url: "https://gphero.github.io/gamdang",
   contact: "", // 문의 이메일을 넣으면 약관·방침에 표시됩니다
   since: "2026-11-14",
+};
+
+/* ------------------------------------------------------------------
+   주소 앞에 붙는 경로(base)
+
+   GitHub Pages 는 사이트를 /gamdang/ 아래에 올립니다. 앱 안에서는
+   계속 "/guide" 같은 논리 경로를 쓰고, 브라우저에 쓰고 읽을 때만
+   U() 와 toPath() 로 앞가지를 붙였다 뗍니다. 루트에 올리는 환경에서는
+   BASE 가 "/" 라 두 함수 모두 아무 일도 하지 않습니다.
+------------------------------------------------------------------- */
+export const BASE = (import.meta.env && import.meta.env.BASE_URL) || "/";
+
+/** 논리 경로 → 실제 주소 ("/guide" → "/gamdang/guide") */
+export const U = (p) => {
+  const s = String(p || "/");
+  if (!s.startsWith("/")) return s;
+  return (BASE + s.slice(1)).replace(/\/{2,}/g, "/");
+};
+
+/** 실제 주소 → 논리 경로 ("/gamdang/guide" → "/guide") */
+export const toPath = (loc) => {
+  let p = String(loc || "/");
+  if (BASE !== "/") {
+    const b = BASE.slice(0, -1);
+    if (p === b) return "/";
+    if (p.startsWith(BASE)) p = "/" + p.slice(BASE.length);
+  }
+  return p.startsWith("/") ? p : "/" + p;
 };

@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 import { GUIDES, GUIDE_PATH, PRIVACY, TERMS } from "./content.js";
-import { SERVICE } from "./config.js";
+import { SERVICE, U } from "./config.js";
 import { Style } from "./App.jsx";
 
 /* 본문 안의 **굵게** 와 [글자](주소) 만 처리합니다 */
@@ -17,8 +17,9 @@ function inline(text, keyBase) {
       const label = tok.slice(1, tok.indexOf("]"));
       const href = tok.slice(tok.indexOf("(") + 1, -1);
       const ext = /^https?:/.test(href);
+      const to = ext ? href : U(href);
       out.push(
-        <a key={`${keyBase}a${i++}`} href={href} className="ilink"
+        <a key={`${keyBase}a${i++}`} href={to} className="ilink"
           {...(ext ? { target: "_blank", rel: "noopener noreferrer" } : {})}>{label}</a>
       );
     }
@@ -105,14 +106,14 @@ function PageShell({ title, lead, children, onHome }) {
       <Style />
       <div className="page">
       <header className="page-top">
-        <a href="/" className="brand plain" onClick={onHome}>
+        <a href={U("/")} className="brand plain" onClick={onHome}>
           <span className="mark" aria-hidden="true" />
           <div>
             <h1>{SERVICE.name}</h1>
             <p className="tagline">{SERVICE.tagline}</p>
           </div>
         </a>
-        <a href="/" className="btn primary" onClick={onHome}>계산해 보기</a>
+        <a href={U("/")} className="btn primary" onClick={onHome}>계산해 보기</a>
       </header>
       <main className="page-body">
         <h2 className="page-title">{title}</h2>
@@ -128,15 +129,15 @@ function PageShell({ title, lead, children, onHome }) {
 function PageFoot({ onHome }) {
   return (
     <footer className="foot">
-      <a href="/" className="ilink" onClick={onHome}>홈</a>
+      <a href={U("/")} className="ilink" onClick={onHome}>홈</a>
       <span className="fdot">·</span>
-      <a href="/about" className="ilink">소개</a>
+      <a href={U("/about")} className="ilink">소개</a>
       <span className="fdot">·</span>
-      <a href="/guide" className="ilink">가이드</a>
+      <a href={U("/guide")} className="ilink">가이드</a>
       <span className="fdot">·</span>
-      <a href="/privacy" className="ilink">개인정보처리방침</a>
+      <a href={U("/privacy")} className="ilink">개인정보처리방침</a>
       <span className="fdot">·</span>
-      <a href="/terms" className="ilink">이용약관</a>
+      <a href={U("/terms")} className="ilink">이용약관</a>
     </footer>
   );
 }
@@ -147,14 +148,14 @@ export function AboutPage({ onHome }) {
       <Style />
       <div className="page">
       <header className="page-top">
-        <a href="/" className="brand plain" onClick={onHome}>
+        <a href={U("/")} className="brand plain" onClick={onHome}>
           <span className="mark" aria-hidden="true" />
           <div>
             <h1>{SERVICE.name}</h1>
             <p className="tagline">{SERVICE.tagline}</p>
           </div>
         </a>
-        <a href="/" className="btn primary" onClick={onHome}>계산해 보기</a>
+        <a href={U("/")} className="btn primary" onClick={onHome}>계산해 보기</a>
       </header>
 
       <section className="hero">
@@ -166,8 +167,8 @@ export function AboutPage({ onHome }) {
           감당하기 어렵다면 <b>무엇을 얼마나 바꿔야 하는지</b>까지 계산합니다.
         </p>
         <div className="row">
-          <a href="/" className="btn primary big" onClick={onHome}>차근차근 시작하기</a>
-          <a href="/guide" className="btn big">먼저 읽어보기</a>
+          <a href={U("/")} className="btn primary big" onClick={onHome}>차근차근 시작하기</a>
+          <a href={U("/guide")} className="btn big">먼저 읽어보기</a>
         </div>
         <p className="mut sm" style={{ marginTop: 14 }}>
           가입하지 않아도 바로 쓸 수 있습니다. 계좌를 연결하지 않고, 직접 적은 금액만 다룹니다.
@@ -236,7 +237,7 @@ export function AboutPage({ onHome }) {
       <section className="cta">
         <h3>지금 재 보세요</h3>
         <p>5분이면 됩니다. 숫자가 대략이어도 방향은 보입니다.</p>
-        <a href="/" className="btn primary big" onClick={onHome}>시작하기</a>
+        <a href={U("/")} className="btn primary big" onClick={onHome}>시작하기</a>
       </section>
 
       <PageFoot onHome={onHome} />
@@ -265,7 +266,7 @@ export function GuideIndex({ onHome }) {
                 const g = byslug(sl);
                 if (!g) return null;
                 return (
-                  <a key={sl} className="gcard" href={`/guide/${g.slug}`}>
+                  <a key={sl} className="gcard" href={U(`/guide/${g.slug}`)}>
                     <h3>{g.title}</h3>
                     <p>{g.summary}</p>
                     <span className="gmore">읽기 →</span>
@@ -280,7 +281,7 @@ export function GuideIndex({ onHome }) {
       <div className="cta">
         <h3>읽었으면 재 보세요</h3>
         <p>버는 돈과 쓰는 돈을 넣으면 앞으로의 잔고가 그려집니다.</p>
-        <a href="/" className="btn primary big" onClick={onHome}>계산해 보기</a>
+        <a href={U("/")} className="btn primary big" onClick={onHome}>계산해 보기</a>
       </div>
     </PageShell>
   );
@@ -292,7 +293,7 @@ export function GuidePage({ slug, onHome }) {
     return (
       <PageShell title="찾을 수 없는 글" onHome={onHome}>
         <p className="pr-p">주소가 바뀌었거나 없는 글입니다.</p>
-        <p className="pr-p"><a className="ilink" href="/guide">가이드 목록으로</a></p>
+        <p className="pr-p"><a className="ilink" href={U("/guide")}>가이드 목록으로</a></p>
       </PageShell>
     );
   }
@@ -307,11 +308,11 @@ export function GuidePage({ slug, onHome }) {
       <div className="gnext">
         <h4 className="sub-h">이어서 읽기</h4>
         <p className="mut sm" style={{ margin: "0 0 12px" }}>
-          <a className="ilink" href="/guide">전체 순서 보기</a>
+          <a className="ilink" href={U("/guide")}>전체 순서 보기</a>
         </p>
         <div className="glist">
           {others.slice(0, 2).map((o) => (
-            <a key={o.slug} className="gcard" href={`/guide/${o.slug}`}>
+            <a key={o.slug} className="gcard" href={U(`/guide/${o.slug}`)}>
               <h3>{o.title}</h3>
               <p>{o.summary}</p>
             </a>

@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, ReferenceLine, Legend,
 } from "recharts";
 import { storage } from "./storage.js";
-import { SUPABASE_URL, SUPABASE_KEY, HOSTED, SERVICE } from "./config.js";
+import { SUPABASE_URL, SUPABASE_KEY, HOSTED, SERVICE, U, toPath } from "./config.js";
 import { AboutPage, GuideIndex, GuidePage, LegalPage } from "./Pages.jsx";
 import { GUIDES } from "./content.js";
 import { tipsFor, EFFORT } from "./savetips.js";
@@ -1145,7 +1145,7 @@ function LevelStrip({ result, floor, unit }) {
 /* ------------------------------------------------------------------
    아주 작은 라우터
    계산기는 /, 읽을거리와 약관은 각자의 주소를 가집니다.
-   Netlify 의 _redirects 가 모든 경로를 index.html 로 보내 줍니다.
+   없는 주소는 호스팅 쪽에서 index.html(또는 404.html)로 보내 줍니다.
 ------------------------------------------------------------------- */
 const TITLES = {
   "/": `${SERVICE.name} — ${SERVICE.tagline}`,
@@ -1156,10 +1156,10 @@ const TITLES = {
 };
 
 function useRoute() {
-  const [path, setPath] = useState(() => window.location.pathname || "/");
+  const [path, setPath] = useState(() => toPath(window.location.pathname));
 
   useEffect(() => {
-    const onPop = () => setPath(window.location.pathname || "/");
+    const onPop = () => setPath(toPath(window.location.pathname));
     window.addEventListener("popstate", onPop);
 
     /* 같은 사이트 안의 링크는 새로고침 없이 이동합니다 */
@@ -1171,7 +1171,7 @@ function useRoute() {
       if (!href || !href.startsWith("/") || a.target === "_blank") return;
       e.preventDefault();
       if (href !== window.location.pathname) window.history.pushState({}, "", href);
-      setPath(href);
+      setPath(toPath(href));
       window.scrollTo(0, 0);
     };
     document.addEventListener("click", onClick);
@@ -1197,7 +1197,7 @@ function useRoute() {
 
   const go = (to) => (e) => {
     if (e) e.preventDefault();
-    window.history.pushState({}, "", to);
+    window.history.pushState({}, "", U(to));
     setPath(to);
     window.scrollTo(0, 0);
   };
@@ -1440,7 +1440,7 @@ function Cashflow() {
             <span className="wizlabel">설정 마법사</span>
             <span className="wizlabel-sm">마법사</span>
           </button>
-          <a className="guidebtn" href="/guide" title="올바른 가계경제를 만드는 순서와 기준">
+          <a className="guidebtn" href={U("/guide")} title="올바른 가계경제를 만드는 순서와 기준">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
               <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H5.5A1.5 1.5 0 0 1 4 15.5z"
                 stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinejoin="round" />
@@ -1519,13 +1519,13 @@ function Cashflow() {
       {wizard && <Wizard plan={plan} setPlan={setPlan} onClose={() => setWizard(false)} />}
 
       <footer className="foot">
-        <a href="/about" className="ilink">소개</a>
+        <a href={U("/about")} className="ilink">소개</a>
         <span className="fdot">·</span>
-        <a href="/guide" className="ilink">가이드</a>
+        <a href={U("/guide")} className="ilink">가이드</a>
         <span className="fdot">·</span>
-        <a href="/privacy" className="ilink">개인정보처리방침</a>
+        <a href={U("/privacy")} className="ilink">개인정보처리방침</a>
         <span className="fdot">·</span>
-        <a href="/terms" className="ilink">이용약관</a>
+        <a href={U("/terms")} className="ilink">이용약관</a>
         <span className="fdot">·</span>
         {online ? "내 계정에 저장됩니다" : "지금은 이 브라우저에만 저장됩니다"}
       </footer>
@@ -2231,8 +2231,8 @@ function ConnTab({ conn, persistConn, online, plan, snaps, catalog, pullRemote, 
         {msg && <p className="msg ok">{msg}</p>}
 
         <p className="mut sm" style={{ marginTop: 14 }}>
-          가입하면 <a href="/terms" className="ilink">이용약관</a>과{" "}
-          <a href="/privacy" className="ilink">개인정보처리방침</a>에 동의하는 것으로 봅니다.
+          가입하면 <a href={U("/terms")} className="ilink">이용약관</a>과{" "}
+          <a href={U("/privacy")} className="ilink">개인정보처리방침</a>에 동의하는 것으로 봅니다.
           저장되는 것은 이메일과 직접 입력한 금액뿐이며, 계좌·카드 번호는 받지 않습니다.
         </p>
       </section>
@@ -2552,8 +2552,9 @@ function BuiltinTip({ t }) {
         <p className="tiplinks">
           {t.links.map((l) => {
             const out = /^https?:/i.test(l.href);
+            const to = out ? l.href : U(l.href);
             return (
-              <a key={l.href} className="ilink" href={l.href}
+              <a key={l.href} className="ilink" href={to}
                 {...(out ? { target: "_blank", rel: "noopener noreferrer nofollow" } : {})}>
                 {l.label}{out ? " ↗" : " →"}
               </a>
@@ -2780,7 +2781,7 @@ function SaveTab({ plan, conn, unit, setTab }) {
         <p className="mut sm">
           줄일 곳은 커피값이 아니라 <b>매달 자동으로 빠져나가는 고정비</b>입니다.
           한 번 갈아타면 다음 달부터 계속 줄어드는 항목을 먼저 보세요.{" "}
-          <a className="ilink" href="/guide/spending-habits">읽어보기</a>
+          <a className="ilink" href={U("/guide/spending-habits")}>읽어보기</a>
         </p>
 
         {outs.length === 0 && (
@@ -3637,7 +3638,7 @@ function SavingsTab({ plan, up, unit, results, primary }) {
           <p className="seed-do">
             <b>자동이체로 걸어두세요.</b> 매달 넣을까 말까를 고민하면 시장이 좋을 때 많이 넣고 나쁠 때 멈추게 됩니다.
             결정을 없애는 쪽이 오래갑니다.{" "}
-            <a className="ilink" href="/guide/saving-plan">더 읽기</a>
+            <a className="ilink" href={U("/guide/saving-plan")}>더 읽기</a>
           </p>
         </div>
 
@@ -3701,7 +3702,7 @@ function SavingsTab({ plan, up, unit, results, primary }) {
               <b> 같은 시간을 쓰는 관계</b>는 비싼 자리에서 만난 사이보다 오래가고,
               만나는 데 드는 비용도 낮습니다. 둘이 되고 아이가 생겨도
               공원·하천·도서관·산은 그대로 씁니다.{" "}
-              <a className="ilink" href="/guide/free-leisure">돈을 쓰지 않고 쉬는 법</a>
+              <a className="ilink" href={U("/guide/free-leisure")}>돈을 쓰지 않고 쉬는 법</a>
             </p>
           </div>
         </div>
