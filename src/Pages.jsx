@@ -249,7 +249,7 @@ export function GuideIndex({ onHome }) {
   const byslug = (sl) => GUIDES.find((g) => g.slug === sl);
   return (
     <PageShell title="올바른 가계경제 만들기" onHome={onHome}
-      lead="순서가 있습니다. 쓰는 돈을 알고, 무너지지 않을 선을 만들고, 남는 돈을 굴리고, 그다음에 큰 지출을 감당합니다. 이 도구가 계산에 쓰는 기준을 글로 풀었습니다.">
+      lead="순서가 있습니다. 쓰는 돈을 알고, 무너지지 않을 선을 만들고, 남는 돈을 굴리고, 지치지 않게 유지하면서, 그다음에 큰 지출을 감당합니다. 이 도구가 계산에 쓰는 기준을 글로 풀었습니다.">
       <div className="path">
         {GUIDE_PATH.map((stage) => (
           <section key={stage.step} className="stage">

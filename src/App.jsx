@@ -3621,6 +3621,21 @@ function SavingsTab({ plan, up, unit, results, primary }) {
               이 계획이라면 매달 <b>{money(free * CARE_SHARE, unit)}</b> 정도는 나를 위해 써도 괜찮습니다.
             </p>
           )}
+          <div className="freefun">
+            <b>그리고 그중 상당 부분은 돈이 들지 않습니다.</b>
+            <p>
+              걷기·달리기, 등산, 명상, 도서관, 공공체육시설, 공공자전거처럼
+              0원에 가까운 것들로 하루가 채워집니다. 돈을 쓰지 않고도 쉴 줄 알면
+              아끼는 일이 참는 일이 아니게 됩니다.
+            </p>
+            <p>
+              이런 활동에는 사람이 붙습니다. 러닝 모임이나 동네 산행처럼
+              <b> 같은 시간을 쓰는 관계</b>는 비싼 자리에서 만난 사이보다 오래가고,
+              만나는 데 드는 비용도 낮습니다. 둘이 되고 아이가 생겨도
+              공원·하천·도서관·산은 그대로 씁니다.{" "}
+              <a className="ilink" href="/guide/free-leisure">돈을 쓰지 않고 쉬는 법</a>
+            </p>
+          </div>
         </div>
       </section>
 
@@ -4356,6 +4371,10 @@ export function Style() {
   font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap;flex:none}
 .wizbtn:hover{background:#0B4C56;border-color:#0B4C56}
 .wizbtn svg{flex:none}
+.freefun{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
+.freefun>b{display:block;margin-bottom:5px;font-size:13.5px}
+.freefun p{margin:0 0 6px}
+
 /* 아껴보기 */
 .tipgroup{margin-top:14px}
 .tipgroup>.eyebrow{display:block;margin-bottom:8px;color:var(--deep)}
