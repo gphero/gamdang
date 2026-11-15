@@ -4459,6 +4459,7 @@ export function Style() {
 .eff.once{border-color:#A8CDB8;color:var(--pos)}
 .eff.swap{border-color:#A6C6CC;color:var(--deep)}
 .eff.habit{border-color:#DFCB94;color:var(--warn)}
+.eff.warnx{border-color:#E0AFAB;color:var(--bad);background:var(--badbg)}
 .eff.who{border-style:dashed}
 .eff.mine{border-color:var(--deep);color:var(--deep)}
 .eff.bad{border-color:#E0AFAB;color:var(--bad)}
