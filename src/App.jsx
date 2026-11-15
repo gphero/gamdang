@@ -1596,7 +1596,11 @@ function Wizard({ plan, setPlan, onClose }) {
 
       {step === 1 && (
         <>
-          <p className="note">매달 반복해서 나가는 돈입니다. 0으로 두면 계산에서 빠집니다.</p>
+          <p className="note">
+            매달 반복해서 나가는 돈입니다. 0으로 두면 계산에서 빠집니다.
+            <b> 식비와 생활비는 기억으로 적으면 대개 실제보다 적게 나옵니다.</b>{" "}
+            카드 결제 내역을 한 달치 훑어보고 넣으면 뒤의 판정이 훨씬 정확해집니다.
+          </p>
           <div className="lines">
             {d.living.map((l, i) => (
               <div key={l.name} className="wrow">
@@ -2369,6 +2373,30 @@ function ItemsTab({ plan, up, unit }) {
           <div><span className="eyebrow">월 환산 지출</span><b className="mono neg">{money(sumMonthly(outList), unit)}</b></div>
           <div><span className="eyebrow">월 순현금흐름</span><b className={`mono ${netMonthly < 0 ? "neg" : "pos"}`}>{money(netMonthly, unit)}</b></div>
           <p className="mut sm">주기가 다른 항목은 월 단위로 환산해 더했습니다. 일회성 항목과 연 증가율은 빠져 있으니 실제 흐름은 대시보드에서 확인하세요.</p>
+        </div>
+
+        <div className="habitnote">
+          <span className="eyebrow">여기 적은 숫자가 맞아야 판정도 맞습니다</span>
+          <p>
+            이 화면에서 가장 틀리기 쉬운 항목은 <b>식비와 생활비</b>입니다.
+            대개 실제보다 적게 적습니다. 고정비는 고지서가 있어 정확하지만, 변동비는 기억으로 적기 때문입니다.
+            그 차이만큼 뒤의 모든 계산이 낙관적으로 나옵니다.
+          </p>
+          <p>
+            <b>카드 혜택으로는 이 문제가 풀리지 않습니다.</b>{" "}
+            할인이나 적립은 쓴 돈의 일부를 돌려받는 것이고, 안 쓰면 100%가 남습니다.
+            전월 실적을 채우려고 평소에 안 쓰던 돈을 쓰면 오히려 손해입니다.
+            카드를 고르는 일보다 <b>얼마를 쓰는지 아는 일</b>이 먼저입니다.
+          </p>
+          <p className="habit-do">
+            <b>두세 달만 해보세요.</b> 그 뒤로는 평균이 잡혀서 계속 적지 않아도 됩니다.
+          </p>
+          <ul className="habit-list">
+            <li><b>영수증 다시 보기</b> — 주말에 한 번, 그 주에 쓴 것을 훑습니다. 기억에 없는 지출이 꼭 나옵니다</li>
+            <li><b>카드 결제 내역 분류</b> — 앱에서 한 달치를 내려받아 식비·생활용품·배달처럼 나눠 봅니다</li>
+            <li><b>가계부 쓰기</b> — 종이든 앱이든 상관없습니다. 적는 행위 자체가 쓰기 전에 한 번 멈추게 합니다</li>
+            <li><b>현금흐름에 반영</b> — 그렇게 나온 실제 평균을 위 항목에 넣으세요. 그래야 이 도구가 쓸모 있어집니다</li>
+          </ul>
         </div>
 
         {groups.map((g) => (
@@ -3875,6 +3903,15 @@ export function Style() {
 .wtip{margin-top:14px;background:var(--okbg);border:1px solid #BFD6CC;border-radius:4px;
   padding:11px 14px;font-size:12.5px;color:var(--ink2);line-height:1.5}
 .wtip.bad{background:var(--warnbg);border-color:#E4D4A0}
+.habitnote{margin-top:14px;background:#FBF7F0;border:1px solid #E6DCCB;border-radius:4px;padding:15px 17px}
+.habitnote .eyebrow{color:#7A5E2E;font-weight:600;margin-bottom:7px}
+.habitnote p{margin:0 0 9px;font-size:13px;line-height:1.72;color:var(--ink2)}
+.habitnote b{color:var(--ink)}
+.habit-do{background:#fff;border-radius:3px;padding:8px 11px;margin-bottom:10px!important}
+.habit-list{margin:0;padding-left:18px;font-size:12.5px;line-height:1.7;color:var(--ink2)}
+.habit-list li{margin-bottom:5px}
+.habit-list li:last-child{margin:0}
+
 .carenote{margin-top:14px;background:#F6F2F7;border:1px solid #DED2E2;border-radius:4px;padding:14px 16px}
 .carenote .eyebrow{color:#6B4A66;font-weight:600;margin-bottom:6px}
 .carenote p{margin:0 0 8px;font-size:13px;line-height:1.7;color:var(--ink2)}
