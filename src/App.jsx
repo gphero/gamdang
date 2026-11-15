@@ -2191,6 +2191,36 @@ function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
         </Field>
       </section>
 
+      {(() => {
+        /* 비상금(안전선)은 생활비 몇 달치로 잡는 게 보통입니다.
+           실제 지출에서 계산해 바로 적용할 수 있게 합니다. */
+        const monthlyOut = plan.items
+          .filter((i) => i.flow === "out" && i.kind !== "oneoff")
+          .reduce((a, i) => a + num(i.amount) / freqStep(i.freq), 0);
+        if (monthlyOut <= 0) return null;
+        const floorNow = num(plan.settings.floor);
+        const m3 = Math.round(monthlyOut * 3 / 100000) * 100000;
+        const m6 = Math.round(monthlyOut * 6 / 100000) * 100000;
+        const months = floorNow / monthlyOut;
+        const low = floorNow < monthlyOut * 3;
+        return (
+          <div className={`floorhint${low ? " low" : ""}`}>
+            <div className="fh-text">
+              <b>비상금은 생활비 3~6개월치</b>를 많이 씁니다.
+              지금 지출로 보면 <span className="mono">{money(m3, unit)} ~ {money(m6, unit)}</span>입니다.
+              {floorNow > 0
+                ? <> 현재 안전선 {money(floorNow, unit)}은 약 <b>{months.toFixed(1)}개월치</b>입니다.
+                    {low && " 수입이 끊기면 버티기 빠듯합니다."}</>
+                : <> 지금은 안전선이 0이라 잔고가 바닥나기 직전까지 \u2018여유 있음\u2019으로 나옵니다.</>}
+            </div>
+            <div className="row">
+              <button className="btn sm" onClick={() => up((p) => { p.settings.floor = m3; })}>3개월치</button>
+              <button className="btn sm" onClick={() => up((p) => { p.settings.floor = m6; })}>6개월치</button>
+            </div>
+          </div>
+        );
+      })()}
+
       <div className={`verdict ${verdict.t}`}>
         <strong>{verdict.h}</strong>
         <span>{verdict.s}</span>
@@ -2333,6 +2363,21 @@ function Stat({ k, v, sub, tone }) {
 }
 
 /* ---------------- 수입·지출 탭 ---------------- */
+/* 매달 나가지 않아 빠뜨리기 쉬운 지출들.
+   금액은 집집마다 달라 비워 두고, 주기와 분류만 맞춰 띄웁니다. */
+const FORGOTTEN = [
+  { name: "경조사비", cat: "기타", freq: "quarterly", why: "결혼·장례·돌잔치. 몰릴 때 한 번에 나갑니다" },
+  { name: "명절비", cat: "기타", freq: "semiannual", why: "선물, 용돈, 교통비" },
+  { name: "자동차세", cat: "기타", freq: "semiannual", why: "6월·12월 (연납하면 1월)" },
+  { name: "자동차 보험", cat: "보험", freq: "yearly", why: "1년에 한 번 목돈" },
+  { name: "재산세", cat: "기타", freq: "yearly", why: "집이 있다면 7월·9월" },
+  { name: "휴가·여행", cat: "변동비", freq: "yearly", why: "미리 잡아두면 죄책감 없이 씁니다" },
+  { name: "건강검진·병원비", cat: "기타", freq: "yearly", why: "치과는 특히 큽니다" },
+  { name: "가전·가구 교체", cat: "기타", freq: "yearly", why: "고장은 예고 없이 옵니다" },
+  { name: "아이 학기 초 비용", cat: "교육·육아", freq: "semiannual", why: "입학·새 학기에 몰립니다" },
+  { name: "종합소득세", cat: "기타", freq: "yearly", why: "사업·임대 소득이 있다면 5월" },
+];
+
 function ItemsTab({ plan, up, unit }) {
   const [edit, setEdit] = useState(null);
   const [del, setDel] = useState(null);
@@ -2384,6 +2429,37 @@ function ItemsTab({ plan, up, unit }) {
           <div><span className="eyebrow">월 순현금흐름</span><b className={`mono ${netMonthly < 0 ? "neg" : "pos"}`}>{money(netMonthly, unit)}</b></div>
           <p className="mut sm">주기가 다른 항목은 월 단위로 환산해 더했습니다. 일회성 항목과 연 증가율은 빠져 있으니 실제 흐름은 대시보드에서 확인하세요.</p>
         </div>
+
+        {(() => {
+          const have = new Set(plan.items.map((i) => (i.name || "").trim()));
+          const todo = FORGOTTEN.filter((f) => !have.has(f.name));
+          if (!todo.length) return null;
+          return (
+            <div className="forgot">
+              <span className="eyebrow">매달 나가진 않지만 분명히 나가는 돈</span>
+              <p>
+                이런 지출은 달력에 없으니 계획에서 빠지고, 그래서 그달에 잔고가 꺼집니다.
+                <b> 미리 넣어두면 놀라지 않습니다.</b> 누르면 주기가 맞춰진 채로 열리니 금액만 적으세요.
+              </p>
+              <div className="forgot-chips">
+                {todo.map((f) => (
+                  <button key={f.name} className="fchip" title={f.why}
+                    onClick={() => setEdit({
+                      id: uid(), kind: "recurring", flow: "out", name: f.name, amount: 0,
+                      cat: f.cat, freq: f.freq, startMonth: plan.settings.startMonth,
+                      endMonth: "", growth: 0, month: plan.settings.startMonth,
+                    })}>
+                    <b>{f.name}</b>
+                    <em>{(FREQ.find((x) => x.v === f.freq) || {}).label}</em>
+                  </button>
+                ))}
+              </div>
+              <p className="mut sm" style={{ marginTop: 9 }}>
+                금액을 모르겠으면 작년에 얼마 썼는지 떠올려 대충 넣으세요. 0으로 두는 것보다 낫습니다.
+              </p>
+            </div>
+          );
+        })()}
 
         <div className="habitnote">
           <span className="eyebrow">여기 적은 숫자가 맞아야 판정도 맞습니다</span>
@@ -2980,6 +3056,29 @@ function SavingsTab({ plan, up, unit, results, primary }) {
             지금은 매달 돈이 모자랍니다. 저축보다 <b>수입·지출</b>을 먼저 맞추는 게 순서입니다.
           </div>
         )}
+
+        <div className="seednote">
+          <span className="eyebrow">조급해지면 그때가 가장 위험합니다</span>
+          <p>
+            모으다 보면 남들이 벌었다는 얘기가 들립니다. 쌓이는 속도가 답답해 보이고 나만 뒤처지는 것 같습니다.
+            그때 적금을 깨거나 모은 돈을 한 번에 옮기게 됩니다.
+          </p>
+          <p>
+            <b>원금이 작을 때는 수익률이 납입액을 못 이깁니다.</b>{" "}
+            1,000만원으로 10%를 벌면 100만원이지만, 매달 30만원씩 모으면 1년에 360만원입니다.
+            수익률이 의미를 갖는 건 원금이 충분히 커진 뒤입니다. 순서는 <b>먼저 모으고, 그다음에 굴리기</b>입니다.
+          </p>
+          <p>
+            그리고 반토막이 나면 원금 회복에 100%가 필요합니다. 2년 모은 돈을 잃으면 다시 2년입니다.
+            <b> 기회가 왔을 때 잡는 사람은 그때 현금이 있는 사람입니다.</b> 그 현금이 시드머니고,
+            시드머니는 꾸준히 모아야만 생깁니다.
+          </p>
+          <p className="seed-do">
+            <b>자동이체로 걸어두세요.</b> 매달 넣을까 말까를 고민하면 시장이 좋을 때 많이 넣고 나쁠 때 멈추게 됩니다.
+            결정을 없애는 쪽이 오래갑니다.{" "}
+            <a className="ilink" href="/guide/saving-plan">더 읽기</a>
+          </p>
+        </div>
 
         <div className="carenote">
           <span className="eyebrow">모으기만 하면 지칩니다</span>
@@ -3818,6 +3917,13 @@ export function Style() {
 .icon{background:none;border:0;font-size:15px;cursor:pointer;color:var(--ink3);padding:4px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 
+.floorhint{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+  background:var(--card);border:1px solid var(--line);border-left:3px solid var(--deep);
+  border-radius:4px;padding:11px 15px;margin-bottom:12px}
+.floorhint.low{border-left-color:#C99A1F;background:var(--warnbg);border-color:#E4D4A0}
+.fh-text{font-size:12.5px;line-height:1.65;color:var(--ink2);flex:1 1 320px}
+.fh-text b{color:var(--ink)}
+
 .verdict{display:flex;flex-direction:column;gap:2px;padding:12px 15px;border-radius:4px;margin-bottom:14px;border:1px solid}
 .verdict strong{font-size:14.5px;font-weight:600}
 .verdict span{font-size:12.5px;color:var(--ink2)}
@@ -3958,6 +4064,18 @@ export function Style() {
 .wtip{margin-top:14px;background:var(--okbg);border:1px solid #BFD6CC;border-radius:4px;
   padding:11px 14px;font-size:12.5px;color:var(--ink2);line-height:1.5}
 .wtip.bad{background:var(--warnbg);border-color:#E4D4A0}
+.forgot{margin-top:14px;background:#F2F6F7;border:1px solid #D3E0E3;border-radius:4px;padding:15px 17px}
+.forgot .eyebrow{color:#2C5661;font-weight:600;margin-bottom:7px}
+.forgot p{margin:0;font-size:13px;line-height:1.72;color:var(--ink2)}
+.forgot b{color:var(--ink)}
+.forgot-chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px}
+.fchip{display:inline-flex;align-items:baseline;gap:6px;background:#fff;border:1px solid var(--line);
+  border-radius:20px;padding:6px 13px;font:inherit;font-size:12.5px;cursor:pointer;color:var(--ink)}
+.fchip:hover{border-color:var(--deep);color:var(--deep)}
+.fchip b{font-weight:500}
+.fchip em{font-style:normal;font-size:10.5px;color:var(--ink3)}
+.fchip:hover em{color:var(--deep)}
+
 .habitnote{margin-top:14px;background:#FBF7F0;border:1px solid #E6DCCB;border-radius:4px;padding:15px 17px}
 .habitnote .eyebrow{color:#7A5E2E;font-weight:600;margin-bottom:7px}
 .habitnote p{margin:0 0 9px;font-size:13px;line-height:1.72;color:var(--ink2)}
@@ -3978,6 +4096,13 @@ export function Style() {
 .habit-list{margin:0;padding-left:18px;font-size:12.5px;line-height:1.7;color:var(--ink2)}
 .habit-list li{margin-bottom:5px}
 .habit-list li:last-child{margin:0}
+
+.seednote{margin-top:14px;background:#F1F5F2;border:1px solid #CFE0D4;border-radius:4px;padding:15px 17px}
+.seednote .eyebrow{color:#2F5B40;font-weight:600;margin-bottom:7px}
+.seednote p{margin:0 0 9px;font-size:13px;line-height:1.72;color:var(--ink2)}
+.seednote p:last-child{margin:0}
+.seednote b{color:var(--ink)}
+.seed-do{background:#fff;border-radius:3px;padding:9px 12px}
 
 .carenote{margin-top:14px;background:#F6F2F7;border:1px solid #DED2E2;border-radius:4px;padding:14px 16px}
 .carenote .eyebrow{color:#6B4A66;font-weight:600;margin-bottom:6px}
