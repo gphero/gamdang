@@ -3485,6 +3485,26 @@ function BigEditor({ be, setBe, catalog, onCancel, onSave }) {
    단, 전부 넣으라고 권하지는 않습니다. 아래 CARE_SHARE 를 남겨 둡니다. */
 const CARE_SHARE = 0.2;
 
+/* 아이를 키우는 집은 다릅니다. 지출이 크고 예측이 안 되는데다,
+   저축을 밀어붙이면 가장 먼저 깎이는 게 아이와 보내는 시간과
+   부부가 숨 쉴 틈입니다. 그래서 목표를 '최대한 모으기'가 아니라
+   '비상금 채우고 유지하기'로 바꾸고, 남겨 두는 몫을 키웁니다. */
+const KID_RE = /육아|아이|자녀|아기|유아|어린이집|유치원|학원|교육|돌봄|기저귀|분유|학습지|등원|초등|태권도|소아/;
+const CARE_SHARE_KIDS = 0.4;
+
+const hasKids = (plan) =>
+  (plan.items || []).some(
+    (i) => i.flow === "out" && (KID_RE.test(String(i.cat || "")) || KID_RE.test(String(i.name || "")))
+  );
+
+/** 비상금 목표 = 매달 나가는 돈 × 개월수 */
+function emergencyTarget(plan, months) {
+  const monthlyOut = (plan.items || [])
+    .filter((i) => i.flow === "out" && i.kind !== "oneoff")
+    .reduce((a, i) => a + num(i.amount) / freqStep(i.freq), 0);
+  return Math.round(monthlyOut * months / 100000) * 100000;
+}
+
 function maxMonthlySaving(plan, sc, draft) {
   const fits = (amt) => {
     const p2 = JSON.parse(JSON.stringify(plan));
@@ -3538,6 +3558,14 @@ function SavingsTab({ plan, up, unit, results, primary }) {
   const free = m.avgFree;
   const leftover = free - totals.monthly;
 
+  /* 아이를 키우는 집이면 목표를 '최대한 모으기'에서
+     '비상금 채우고 유지하기'로 바꿉니다. */
+  const kids = hasKids(plan);
+  const share = kids ? CARE_SHARE_KIDS : CARE_SHARE;
+  const floorNow = num(plan.settings.floor);
+  const need6 = emergencyTarget(plan, 6);
+  const fundShort = Math.max(0, need6 - Math.max(floorNow, num(plan.settings.opening)));
+
   return (
     <>
       <section className="card">
@@ -3563,9 +3591,11 @@ function SavingsTab({ plan, up, unit, results, primary }) {
 
         {free > 0 && leftover > 0 && (
           <div className="wtip">
-            매달 <b>{money(leftover, unit)}</b>이 통장에 그냥 쌓이고 있습니다.
-            쓸 일이 정해지지 않은 돈이라면 적금으로 묶어두는 편이 낫습니다.
-            다만 전부 넣지는 마세요 — 아래를 읽어보세요.
+            매달 <b>{money(leftover, unit)}</b>이 통장에 그냥 쌓이고 있습니다.{" "}
+            {kids
+              ? "육아 중이라면 비상금을 먼저 채우고, 그 뒤로는 묶지 말고 바로 꺼낼 수 있게 두세요."
+              : "쓸 일이 정해지지 않은 돈이라면 적금으로 묶어두는 편이 낫습니다."}
+            {" "}다만 전부 넣지는 마세요 — 아래를 읽어보세요.
           </div>
         )}
 
@@ -3605,6 +3635,35 @@ function SavingsTab({ plan, up, unit, results, primary }) {
           </p>
         </div>
 
+        {kids && (
+          <div className="kidnote">
+            <span className="eyebrow">아이를 키우는 중이라면</span>
+            <p>
+              지출에 육아·교육 항목이 있습니다. 이 시기에는 저축 목표를 바꾸는 편이 낫습니다.
+              <b> 최대한 모으기가 아니라, 비상금을 채우고 그 선을 지키는 것</b>까지가 목표입니다.
+            </p>
+            <p>
+              아이를 키우는 동안에는 지출이 크고 예측이 잘 안 됩니다. 갑자기 아프고, 갑자기 필요한 게
+              생깁니다. 그때 버티게 해주는 건 적금 잔액이 아니라 <b>바로 꺼낼 수 있는 돈</b>입니다.
+              적금을 많이 들어 두면 정작 필요한 순간에 깨게 되고, 손해는 그때 생깁니다.
+            </p>
+            <p>
+              {need6 > 0 ? (
+                <>비상금 목표는 생활비 6개월치, 지금 지출로는 <b className="mono">{money(need6, unit)}</b>입니다. </>
+              ) : null}
+              {fundShort > 0
+                ? <>여기까지만 채우고, 채운 다음에는 <b>저축 금액을 더 늘리지 마세요.</b></>
+                : <>이미 그 선을 넘겼습니다. <b>지금은 더 모으는 것보다 잘 쓰는 쪽이 낫습니다.</b></>}
+            </p>
+            <p className="kid-do">
+              남는 돈은 <b>부부와 아이가 같이 행복한 데</b> 쓰세요. 아이와 보내는 주말, 둘이서 밥 한 끼,
+              사람을 불러 몇 시간 맡기고 쉬는 것 — 지금 아니면 못 하는 것들입니다.
+              이 몇 년을 쥐어짜서 모은 돈보다, 그 시간에 남은 것이 더 오래갑니다.
+              아이도 통장 잔액은 기억하지 못합니다.
+            </p>
+          </div>
+        )}
+
         <div className="carenote">
           <span className="eyebrow">모으기만 하면 지칩니다</span>
           <p>
@@ -3612,13 +3671,16 @@ function SavingsTab({ plan, up, unit, results, primary }) {
             참다가 한 번에 무너지는 쪽이 조금씩 쓰는 쪽보다 결국 더 많이 씁니다.
           </p>
           <p>
-            <b>여유의 {Math.round(CARE_SHARE * 100)}% 정도는 나를 위해 남겨두세요.</b>{" "}
-            취미, 운동, 친구 만나기, 혼자 쉬는 시간처럼 돈이 들더라도 버티게 해주는 것들입니다.
+            <b>여유의 {Math.round(share * 100)}% 정도는 {kids ? "가족을 위해" : "나를 위해"} 남겨두세요.</b>{" "}
+            {kids
+              ? "아이를 키우는 중이라 더 크게 잡았습니다. 부부가 숨 쉴 틈이 먼저 깎이면 가장 먼저 지칩니다."
+              : "취미, 운동, 친구 만나기, 혼자 쉬는 시간처럼 돈이 들더라도 버티게 해주는 것들입니다."}{" "}
             저축은 생활을 쥐어짜서가 아니라 <b>남는 돈에서</b> 하는 것이 오래갑니다.
           </p>
           {free > 0 && (
             <p className="mono carefig">
-              이 계획이라면 매달 <b>{money(free * CARE_SHARE, unit)}</b> 정도는 나를 위해 써도 괜찮습니다.
+              이 계획이라면 매달 <b>{money(free * share, unit)}</b> 정도는
+              {kids ? " 가족을 위해" : " 나를 위해"} 써도 괜찮습니다.
             </p>
           )}
           <div className="freefun">
@@ -3711,6 +3773,8 @@ function SavingsTab({ plan, up, unit, results, primary }) {
 }
 
 function SavingEditor({ sv, setSv, plan, sc, unit, free, onCancel, onSave }) {
+  const kids = hasKids(plan);
+  const share = kids ? CARE_SHARE_KIDS : CARE_SHARE;
   const sch = savingSchedule(sv);
   const [maxAmt, setMaxAmt] = useState(null);
   const regular = sv.kind !== "deposit";
@@ -3724,7 +3788,7 @@ function SavingEditor({ sv, setSv, plan, sc, unit, free, onCancel, onSave }) {
      채우는 금액까지 "가능"으로 나오므로, 월 여유로 한 번 더 묶습니다. */
   const flowCap = free > 0 ? free : 0;
   const base = maxAmt === null ? null : Math.min(maxAmt, flowCap);
-  const safe = base === null ? null : Math.max(0, Math.floor(base * (1 - CARE_SHARE) / 10000) * 10000);
+  const safe = base === null ? null : Math.max(0, Math.floor(base * (1 - share) / 10000) * 10000);
   const limitedByFlow = maxAmt !== null && flowCap < maxAmt;
 
   return (
@@ -3776,6 +3840,7 @@ function SavingEditor({ sv, setSv, plan, sc, unit, free, onCancel, onSave }) {
             <>
               <p className="mut sm" style={{ margin: "6px 0 10px" }}>
                 지금 계획에서 안전선을 지키며 넣을 수 있는 최대 금액을 찾아 봅니다.
+                {kids && " 육아 중이라 목표는 비상금까지입니다. 그 뒤로는 더 늘리지 않는 쪽을 권합니다."}
               </p>
               <button className="btn sm" onClick={findMax}>계산하기</button>
             </>
@@ -3794,12 +3859,12 @@ function SavingEditor({ sv, setSv, plan, sc, unit, free, onCancel, onSave }) {
                 <p className="mut sm" style={{ marginTop: 8 }}>
                   안전선만 따지면 {won(maxAmt)}까지 가능하지만, 그건 모아둔 돈을 헐어서 채우는 금액입니다.
                   적금은 매달 버는 돈에서 내는 것이라 <b>월 여유 {won(flowCap)}</b>을 넘지 않게 잡았고,
-                  거기서 나를 위해 쓸 몫 {Math.round(CARE_SHARE * 100)}%를 남겼습니다.
+                  거기서 {kids ? "가족을 위해" : "나를 위해"} 쓸 몫 {Math.round(share * 100)}%를 남겼습니다.
                   목돈을 묶어두려면 적금이 아니라 <b>예금</b>이 맞습니다.
                 </p>
               ) : (
                 <p className="mut sm" style={{ marginTop: 8 }}>
-                  최대까지 넣으면 여유가 0이 됩니다. 나를 위해 쓸 몫 {Math.round(CARE_SHARE * 100)}%를 남긴
+                  최대까지 넣으면 여유가 0이 됩니다. {kids ? "가족을 위해" : "나를 위해"} 쓸 몫 {Math.round(share * 100)}%를 남긴
                   금액을 권합니다. 모으는 일은 몇 년을 이어가야 하고, 숨 쉴 틈이 없으면 중간에 깨지기 마련입니다.
                 </p>
               )}
@@ -4371,6 +4436,11 @@ export function Style() {
   font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap;flex:none}
 .wizbtn:hover{background:#0B4C56;border-color:#0B4C56}
 .wizbtn svg{flex:none}
+.kidnote{border:1px solid #E4D4A0;background:var(--warnbg);border-radius:10px;padding:14px 16px;margin-top:12px}
+.kidnote p{margin:0 0 8px;font-size:13.5px;line-height:1.7;color:var(--ink2)}
+.kidnote p:last-child{margin-bottom:0}
+.kid-do{padding-top:8px;border-top:1px dashed #DCC98F}
+
 .freefun{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
 .freefun>b{display:block;margin-bottom:5px;font-size:13.5px}
 .freefun p{margin:0 0 6px}
