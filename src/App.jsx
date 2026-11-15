@@ -2378,25 +2378,65 @@ function ItemsTab({ plan, up, unit }) {
         <div className="habitnote">
           <span className="eyebrow">여기 적은 숫자가 맞아야 판정도 맞습니다</span>
           <p>
-            이 화면에서 가장 틀리기 쉬운 항목은 <b>식비와 생활비</b>입니다.
-            대개 실제보다 적게 적습니다. 고정비는 고지서가 있어 정확하지만, 변동비는 기억으로 적기 때문입니다.
-            그 차이만큼 뒤의 모든 계산이 낙관적으로 나옵니다.
+            이 화면에서 가장 틀리기 쉬운 항목은 <b>식비와 생활비</b>입니다. 고정비는 고지서가 있어 정확하지만,
+            변동비는 기억으로 적고 기억은 대개 실제보다 적게 잡습니다. 그 차이만큼 뒤의 계산이 낙관적으로 나옵니다.
           </p>
           <p>
-            <b>카드 혜택으로는 이 문제가 풀리지 않습니다.</b>{" "}
-            할인이나 적립은 쓴 돈의 일부를 돌려받는 것이고, 안 쓰면 100%가 남습니다.
-            전월 실적을 채우려고 평소에 안 쓰던 돈을 쓰면 오히려 손해입니다.
-            카드를 고르는 일보다 <b>얼마를 쓰는지 아는 일</b>이 먼저입니다.
+            <b>카드 결제 내역을 보는 목적은 아끼기 위해서가 아닙니다.</b>{" "}
+            내가 어디에 얼마를 쓰는지 알기 위해서입니다. 한 달치를 내려받아 식비·배달·교통처럼 큰 덩어리로만
+            나눠 보세요. 두세 달이면 평균이 잡히고, 그 뒤로는 계속 적지 않아도 됩니다.
           </p>
-          <p className="habit-do">
-            <b>두세 달만 해보세요.</b> 그 뒤로는 평균이 잡혀서 계속 적지 않아도 됩니다.
-          </p>
+
+          <div className="habit-split">
+            <div className="hs keep">
+              <span className="hs-tag">그대로 두세요</span>
+              <b>가끔 맛있는 거 먹기</b>
+              <p>
+                한 달에 한두 번 좋은 걸 먹거나 사고 싶던 걸 사는 돈은 줄이지 마세요.
+                줄여도 액수가 작고, 참다가 한 번에 무너지면 그게 더 큽니다.
+                이런 지출은 계속 쓰기 위해 버티게 해주는 쪽입니다.
+              </p>
+            </div>
+            <div className="hs cut">
+              <span className="hs-tag">여기를 줄이세요</span>
+              <b>매달 똑같이 나가는 고정비</b>
+              <p>
+                한 번 줄이면 <b>매달 자동으로</b> 줄어듭니다. 신경 쓸 일도, 참을 일도 없습니다.
+                같은 1만원이라도 고정비에서 줄인 1만원은 1년이면 12만원, 3년이면 36만원입니다.
+              </p>
+            </div>
+          </div>
+
           <ul className="habit-list">
-            <li><b>영수증 다시 보기</b> — 주말에 한 번, 그 주에 쓴 것을 훑습니다. 기억에 없는 지출이 꼭 나옵니다</li>
-            <li><b>카드 결제 내역 분류</b> — 앱에서 한 달치를 내려받아 식비·생활용품·배달처럼 나눠 봅니다</li>
-            <li><b>가계부 쓰기</b> — 종이든 앱이든 상관없습니다. 적는 행위 자체가 쓰기 전에 한 번 멈추게 합니다</li>
-            <li><b>현금흐름에 반영</b> — 그렇게 나온 실제 평균을 위 항목에 넣으세요. 그래야 이 도구가 쓸모 있어집니다</li>
+            <li>
+              <b>통신비</b> — 알뜰폰으로 옮기면 쓰는 양을 그대로 두고도 요금이 줄어듭니다.
+              통신사업자들이 함께 운영하는 <a className="ilink" href="https://www.mvnohub.kr/product/products.do"
+                target="_blank" rel="noopener noreferrer">알뜰폰허브</a>나{" "}
+              <a className="ilink" href="https://www.smartchoice.or.kr" target="_blank" rel="noopener noreferrer">스마트초이스</a>에서
+              지금 쓰는 데이터량 기준으로 비교해 보세요. 번호는 그대로 가져갑니다
+            </li>
+            <li>
+              <b>인터넷·TV</b> — 약정이 끝났는데 그대로 두고 있는 경우가 많습니다.
+              지역 케이블이나 결합 상품을 함께 견적 내 보세요. 안 보는 채널 묶음을 빼는 것만으로도 줄어듭니다
+            </li>
+            <li>
+              <b>전기</b> — 한전 <b>주택용 에너지캐시백</b>은 지난 2년 같은 기간보다 1%만 덜 써도
+              kWh당 돈을 돌려줍니다. 절감률이 클수록 단가가 올라갑니다. 한전 에너지마켓플레이스에서 신청합니다
+            </li>
+            <li>
+              <b>가스·수도</b> — 난방 설정 온도와 샤워 시간이 대부분을 차지합니다.
+              고지서의 전년 같은 달 사용량과 비교하는 습관만 들여도 달라집니다
+            </li>
+            <li>
+              <b>구독</b> — 안 보는 OTT, 겹치는 음악 서비스, 잊은 멤버십.
+              카드 내역을 훑을 때 가장 확실하게 나오는 항목입니다
+            </li>
           </ul>
+
+          <p className="habit-do">
+            고정비를 줄였으면 <b>위 항목의 금액도 함께 고치세요.</b>{" "}
+            그래야 줄인 만큼이 현금흐름에 반영되고, 감당 가능 판정도 달라집니다.
+          </p>
         </div>
 
         {groups.map((g) => (
@@ -3907,7 +3947,19 @@ export function Style() {
 .habitnote .eyebrow{color:#7A5E2E;font-weight:600;margin-bottom:7px}
 .habitnote p{margin:0 0 9px;font-size:13px;line-height:1.72;color:var(--ink2)}
 .habitnote b{color:var(--ink)}
-.habit-do{background:#fff;border-radius:3px;padding:8px 11px;margin-bottom:10px!important}
+.habit-do{background:#fff;border-radius:3px;padding:9px 12px;margin:10px 0 0!important}
+
+.habit-split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.hs{border-radius:4px;padding:12px 14px;background:#fff;border:1px solid var(--line2)}
+.hs.keep{border-left:3px solid var(--pos)}
+.hs.cut{border-left:3px solid #B5882C}
+.hs-tag{display:block;font-size:10.5px;font-weight:600;letter-spacing:.02em;margin-bottom:5px}
+.hs.keep .hs-tag{color:var(--pos)}
+.hs.cut .hs-tag{color:#8A6508}
+.hs>b{display:block;font-size:14px;margin-bottom:6px;color:var(--ink)}
+.hs p b{color:var(--ink)}
+.hs p{margin:0!important;font-size:12.5px!important;line-height:1.65!important}
+@media (max-width:640px){ .habit-split{grid-template-columns:1fr} }
 .habit-list{margin:0;padding-left:18px;font-size:12.5px;line-height:1.7;color:var(--ink2)}
 .habit-list li{margin-bottom:5px}
 .habit-list li:last-child{margin:0}
