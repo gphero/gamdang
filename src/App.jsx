@@ -456,6 +456,7 @@ function emptyPlan() {
     items: [],
     bigs: [],
     savings: [],
+    wishes: [],
     scenarios: [{ id: "base", name: "기본", color: SC_COLORS[0], note: "", off: {}, ov: {}, inFactor: 100, outFactor: 100 }],
     shown: ["base"],
   };
@@ -1326,6 +1327,7 @@ function Cashflow() {
     const base = emptyPlan();
     const merged = { ...base, ...p, settings: { ...base.settings, ...(p.settings || {}) } };
     if (!Array.isArray(merged.savings)) merged.savings = [];
+    if (!Array.isArray(merged.wishes)) merged.wishes = [];
     if (!merged.scenarios || !merged.scenarios.length) merged.scenarios = base.scenarios;
     merged.scenarios = merged.scenarios.map((s) => ({ off: {}, ov: {}, inFactor: 100, outFactor: 100, ...s }));
     if (!merged.shown || !merged.shown.length) merged.shown = [merged.scenarios[0].id];
@@ -1468,6 +1470,7 @@ function Cashflow() {
           ["bigs", "큰 지출"],
           ["save", "저축"],
           ["tips", "아껴보기"],
+          ["wish", "위시리스트"],
           ["scen", "시나리오"],
           ["cat", "상품 카탈로그"],
           ["snap", "스냅샷"],
@@ -1503,6 +1506,7 @@ function Cashflow() {
         {tab === "items" && <ItemsTab plan={plan} up={up} unit={unit} />}
         {tab === "bigs" && <BigsTab plan={plan} up={up} unit={unit} catalog={catalog} results={results} primary={primary} />}
         {tab === "save" && <SavingsTab plan={plan} up={up} unit={unit} results={results} primary={primary} />}
+        {tab === "wish" && <WishTab plan={plan} up={up} sc={primary} unit={unit} setTab={setTab} />}
         {tab === "tips" && <SaveTab plan={plan} conn={conn} unit={unit} setTab={setTab} />}
         {tab === "scen" && <ScenTab plan={plan} up={up} unit={unit} results={results} />}
         {tab === "cat" && <CatalogTab catalog={catalog} saveCatalog={saveCatalog} />}
@@ -2906,6 +2910,386 @@ function SaveTab({ plan, conn, unit, setTab }) {
           try { await removeTip(conn, t.id); await reload(); }
           catch (e) { setErr(e.message || "삭제하지 못했습니다."); }
         }} />
+    </>
+  );
+}
+
+/* ==================================================================
+   위시리스트 — 사고 싶은 것을 적어 두고 며칠 묵힙니다.
+
+   충동구매는 "사고 싶다"와 "산다" 사이에 시간이 없어서 생깁니다.
+   그 사이에 기간을 끼워 넣고, 기다리는 동안 두 가지를 보여 줍니다.
+     - 이걸 사면 잔고가 어떻게 되는지
+     - 처음에 왜 갖고 싶었는지, 본인이 적은 말 그대로
+   며칠 지나 다시 읽으면 대개 다르게 읽힙니다.
+================================================================== */
+
+/* 금액이 클수록 오래 묵힙니다. 적당히 자주 쓰이는 기준으로 잡았습니다. */
+const WAIT_STEPS = [
+  { upto: 50000, days: 3, label: "3일" },
+  { upto: 300000, days: 7, label: "일주일" },
+  { upto: 1000000, days: 14, label: "2주" },
+  { upto: Infinity, days: 30, label: "한 달" },
+];
+const waitFor = (amount) => (WAIT_STEPS.find((s) => num(amount) <= s.upto) || WAIT_STEPS[3]).days;
+
+const DAY = 86400000;
+const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime(); };
+/** 결정일까지 남은 날. 0 이하면 결정할 때입니다. */
+const daysLeft = (w) => {
+  const added = startOfDay(w.addedAt || Date.now());
+  const due = added + num(w.waitDays) * DAY;
+  return Math.ceil((due - startOfDay(Date.now())) / DAY);
+};
+const dayText = (n) => (n > 0 ? `${n}일 남음` : n === 0 ? "오늘 결정" : `${-n}일 지남`);
+
+const WISH_STATUS = {
+  waiting: "기다리는 중",
+  bought: "샀습니다",
+  dropped: "안 샀습니다",
+};
+
+function emptyWish() {
+  return {
+    id: uid(),
+    name: "",
+    amount: "",
+    why: "",
+    waitDays: 7,
+    addedAt: new Date().toISOString(),
+    status: "waiting",
+    decidedAt: "",
+    note: "",
+    extended: 0,
+  };
+}
+
+/** 이걸 한 번에 사면 잔고가 어떻게 되는지 */
+function wishImpact(plan, sc, w) {
+  const amt = num(w.amount);
+  if (amt <= 0) return null;
+  const p2 = {
+    ...plan,
+    items: [
+      ...plan.items,
+      {
+        id: "wish-" + w.id, kind: "oneoff", flow: "out",
+        name: w.name || "위시리스트", amount: amt, cat: "기타",
+        month: plan.settings.startMonth,
+      },
+    ],
+  };
+  const before = verdictOf(extendHorizon(plan), sc);
+  const after = verdictOf(extendHorizon(p2), sc);
+  return { before, after, breaks: before.ok && !after.ok, amt };
+}
+
+function WishEditor({ w, setW, onSave, onCancel, unit, impact }) {
+  const amt = num(w.amount);
+  const suggested = waitFor(amt);
+  const bad = !String(w.name).trim() || amt <= 0 || String(w.why).trim().length < 5;
+  return (
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <span className="eyebrow">{w.saved ? "고치기" : "담기"}</span>
+          <h2>사고 싶은 것</h2>
+        </div>
+      </div>
+      <div className="grid">
+        <Field label="무엇을">
+          <input className="in" value={w.name} maxLength={60}
+            onChange={(e) => setW({ ...w, name: e.target.value })} placeholder="예: 무선 이어폰" />
+        </Field>
+        <Field label="얼마">
+          <NumIn comma value={w.amount}
+            onChange={(v) => setW({ ...w, amount: v, waitDays: w.touched ? w.waitDays : waitFor(v) })} />
+        </Field>
+        <Field label="왜 갖고 싶은가요?" hint="며칠 뒤에 본인이 다시 읽게 됩니다" wide>
+          <textarea className="in" rows={3} value={w.why} maxLength={300}
+            onChange={(e) => setW({ ...w, why: e.target.value })}
+            placeholder="지금 무엇 때문에 사고 싶은지 그대로 적으세요. 없으면 뭐가 불편한지, 이미 있는 것으로는 왜 안 되는지." />
+        </Field>
+        <Field label="며칠 묵힐까요?" hint={`이 금액이면 ${suggested}일을 권합니다`}>
+          <span className="waitrow">
+            {[1, 3, 7, 14, 30].map((d) => (
+              <button key={d} type="button"
+                className={num(w.waitDays) === d ? "chip on" : "chip"}
+                onClick={() => setW({ ...w, waitDays: d, touched: true })}>
+                {d}일
+              </button>
+            ))}
+          </span>
+        </Field>
+      </div>
+
+      {impact && amt > 0 && (
+        <div className={`wtip${impact.breaks ? " bad" : ""}`}>
+          {impact.breaks ? (
+            <>
+              지금 이걸 사면 <b>{longYM(impact.after.minMonth)}</b>에 안전선이 무너집니다.
+              기다리는 동안 다른 데서 {money(impact.after.short, unit)}을 줄일 수 있는지 보세요.
+            </>
+          ) : (
+            <>
+              사도 안전선은 지킵니다. 가장 낮을 때 잔고가 {money(impact.after.min, unit)}
+              {impact.before.min > impact.after.min
+                ? ` (지금 계획보다 ${money(impact.before.min - impact.after.min, unit)} 낮아집니다)`
+                : ""}.
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="cact">
+        <button className="btn primary" disabled={bad} onClick={onSave}>
+          담아두기
+        </button>
+        <button className="btn" onClick={onCancel}>취소</button>
+      </div>
+      {bad && <p className="mut sm">이름과 금액을 넣고, 왜 갖고 싶은지 한 줄이라도 적어 주세요. 적는 것 자체가 절반입니다.</p>}
+    </section>
+  );
+}
+
+function WishCard({ w, unit, impact, onDecide, onExtend, onEdit, onDelete }) {
+  const left = daysLeft(w);
+  const due = left <= 0;
+  const added = new Date(w.addedAt);
+  const waited = Math.max(0, Math.round((startOfDay(Date.now()) - startOfDay(added)) / DAY));
+
+  if (w.status !== "waiting") {
+    return (
+      <div className={`wish done ${w.status}`}>
+        <div className="wish-h">
+          <b>{w.name}</b>
+          <span className="mono">{money(num(w.amount), unit)}</span>
+          <span className={`eff ${w.status === "bought" ? "swap" : "once"}`}>{WISH_STATUS[w.status]}</span>
+        </div>
+        <p className="mut sm">
+          {waited}일 기다린 뒤 {w.decidedAt ? new Date(w.decidedAt).toLocaleDateString("ko-KR") : ""} 결정
+          {w.note ? ` — ${w.note}` : ""}
+        </p>
+        <div className="tipfoot">
+          <button className="vt plain" onClick={() => onDelete(w)}>지우기</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`wish${due ? " due" : ""}`}>
+      <div className="wish-h">
+        <b>{w.name}</b>
+        <span className="mono">{money(num(w.amount), unit)}</span>
+        <span className={due ? "eff bad" : "eff"}>{dayText(left)}</span>
+      </div>
+
+      {due ? (
+        <>
+          <p className="wish-ask">{waited}일 전에 이렇게 적으셨습니다.</p>
+          <blockquote className="wish-why">{w.why}</blockquote>
+          <p className="wish-ask"><b>지금도 같은 마음인가요?</b></p>
+          {impact && impact.breaks && (
+            <div className="wtip bad">사면 {longYM(impact.after.minMonth)}에 안전선이 무너집니다.</div>
+          )}
+          <div className="tipfoot">
+            <button className="btn sm" onClick={() => onDecide(w, "bought")}>삽니다</button>
+            <button className="btn sm" onClick={() => onExtend(w)}>더 기다립니다</button>
+            <button className="btn sm primary" onClick={() => onDecide(w, "dropped")}>안 삽니다</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="mut sm">{new Date(w.addedAt).toLocaleDateString("ko-KR")}에 담았습니다. 그때까지는 결정하지 않습니다.</p>
+          {impact && impact.breaks && (
+            <div className="wtip bad">지금 사면 {longYM(impact.after.minMonth)}에 안전선이 무너집니다.</div>
+          )}
+          <div className="tipfoot">
+            <button className="vt plain" onClick={() => onEdit(w)}>고치기</button>
+            <button className="vt plain" onClick={() => onDelete(w)}>지우기</button>
+          </div>
+        </>
+      )}
+      {w.extended > 0 && <p className="mut sm">{w.extended}번 미뤘습니다.</p>}
+    </div>
+  );
+}
+
+function WishTab({ plan, up, sc, unit, setTab }) {
+  const [draft, setDraft] = useState(null);
+  const [del, setDel] = useState(null);
+  const [showDone, setShowDone] = useState(false);
+
+  const wishes = plan.wishes || [];
+  const waiting = wishes.filter((w) => w.status === "waiting");
+  const due = waiting.filter((w) => daysLeft(w) <= 0).sort((a, b) => daysLeft(a) - daysLeft(b));
+  const soon = waiting.filter((w) => daysLeft(w) > 0).sort((a, b) => daysLeft(a) - daysLeft(b));
+  const done = wishes.filter((w) => w.status !== "waiting")
+    .sort((a, b) => String(b.decidedAt).localeCompare(String(a.decidedAt)));
+
+  const saved = done.filter((w) => w.status === "dropped").reduce((a, w) => a + num(w.amount), 0);
+  const spent = done.filter((w) => w.status === "bought").reduce((a, w) => a + num(w.amount), 0);
+  const parked = waiting.reduce((a, w) => a + num(w.amount), 0);
+
+  const impactOf = (w) => wishImpact(plan, sc, w);
+
+  /* up() 은 복사본을 받아 그 자리에서 고칩니다. 새 객체를 돌려주면 버려집니다. */
+  const setWishes = (next) => up((p) => { p.wishes = next; });
+
+  const save = () => {
+    const w = { ...draft };
+    delete w.touched; delete w.saved;
+    const exists = wishes.some((x) => x.id === w.id);
+    setWishes(exists ? wishes.map((x) => (x.id === w.id ? w : x)) : [...wishes, w]);
+    setDraft(null);
+  };
+
+  const decide = (w, status) => {
+    setWishes(wishes.map((x) =>
+      x.id === w.id ? { ...x, status, decidedAt: new Date().toISOString() } : x
+    ));
+    /* 샀으면 실제 지출로도 넣어 둡니다. 안 넣으면 예측이 틀어집니다. */
+    if (status === "bought") {
+      up((p) => {
+        p.items.push({
+          id: uid(), kind: "oneoff", flow: "out", name: w.name,
+          amount: num(w.amount), cat: "기타", month: p.settings.startMonth,
+        });
+      });
+    }
+  };
+
+  const extend = (w) => {
+    setWishes(wishes.map((x) =>
+      x.id === w.id
+        ? { ...x, addedAt: new Date().toISOString(), waitDays: Math.min(30, num(x.waitDays) * 2 || 7), extended: num(x.extended) + 1 }
+        : x
+    ));
+  };
+
+  return (
+    <>
+      <section className="card">
+        <div className="card-h">
+          <div>
+            <span className="eyebrow">WISHLIST</span>
+            <h2>위시리스트</h2>
+            <p className="sub">사고 싶은 것을 바로 사지 말고 여기 적어 둡니다. 며칠 뒤에 다시 묻습니다.</p>
+          </div>
+          {!draft && (
+            <button className="btn sm primary" onClick={() => setDraft(emptyWish())}>담아두기</button>
+          )}
+        </div>
+        <p className="mut sm">
+          충동구매는 사고 싶다는 마음과 결제 사이에 시간이 없어서 생깁니다.
+          그 사이에 며칠을 끼워 넣는 것만으로 꽤 걸러집니다.
+          <b> 정말 필요한 것은 며칠 뒤에도 필요합니다.</b>
+        </p>
+
+        {(done.length > 0 || waiting.length > 0) && (
+          <div className="sumbar">
+            <div><span className="eyebrow">안 사고 넘긴 돈</span><b className="mono pos">{money(saved, unit)}</b></div>
+            <div><span className="eyebrow">기다리는 중</span><b className="mono">{money(parked, unit)}</b></div>
+            <div><span className="eyebrow">산 것</span><b className="mono">{money(spent, unit)}</b></div>
+          </div>
+        )}
+      </section>
+
+      {draft && (
+        <WishEditor w={draft} setW={setDraft} unit={unit}
+          impact={impactOf(draft)}
+          onSave={save} onCancel={() => setDraft(null)} />
+      )}
+
+      {due.length > 0 && (
+        <section className="card">
+          <div className="card-h">
+            <div>
+              <span className="eyebrow">결정할 때</span>
+              <h2>{due.length}개</h2>
+              <p className="sub">기다리기로 한 날이 지났습니다. 그때 적은 이유를 다시 읽고 정하세요.</p>
+            </div>
+          </div>
+          {due.map((w) => (
+            <WishCard key={w.id} w={w} unit={unit} impact={impactOf(w)}
+              onDecide={decide} onExtend={extend}
+              onEdit={(x) => setDraft({ ...x, saved: true, touched: true })} onDelete={setDel} />
+          ))}
+        </section>
+      )}
+
+      {soon.length > 0 && (
+        <section className="card">
+          <div className="card-h">
+            <div>
+              <span className="eyebrow">묵히는 중</span>
+              <h2>{soon.length}개</h2>
+            </div>
+          </div>
+          {soon.map((w) => (
+            <WishCard key={w.id} w={w} unit={unit} impact={impactOf(w)}
+              onDecide={decide} onExtend={extend}
+              onEdit={(x) => setDraft({ ...x, saved: true, touched: true })} onDelete={setDel} />
+          ))}
+        </section>
+      )}
+
+      {wishes.length === 0 && !draft && (
+        <section className="card">
+          <div className="wtip">
+            아직 담아둔 것이 없습니다. 사고 싶은 게 생기면 결제 대신 여기에 적어 보세요.
+            적는 데 1분, 기다리는 데 며칠입니다.
+          </div>
+        </section>
+      )}
+
+      {done.length > 0 && (
+        <section className="card">
+          <div className="card-h">
+            <div>
+              <span className="eyebrow">지난 것</span>
+              <h2>{done.length}개</h2>
+              <p className="sub">
+                {saved > 0
+                  ? `안 사고 넘긴 것이 ${money(saved, unit)}어치입니다.`
+                  : "결정이 끝난 것들입니다."}
+              </p>
+            </div>
+            <button className="btn sm" onClick={() => setShowDone(!showDone)}>
+              {showDone ? "접기" : "펼치기"}
+            </button>
+          </div>
+          {showDone && done.map((w) => (
+            <WishCard key={w.id} w={w} unit={unit} impact={null}
+              onDecide={decide} onExtend={extend} onEdit={() => {}} onDelete={setDel} />
+          ))}
+        </section>
+      )}
+
+      <section className="card">
+        <div className="card-h">
+          <div>
+            <span className="eyebrow">왜 기다리나</span>
+            <h2>며칠이면 충분합니다</h2>
+          </div>
+        </div>
+        <p className="mut sm">
+          갖고 싶은 마음은 대개 며칠 안에 가라앉습니다. 가라앉지 않는 것만 사면 됩니다.
+          기다리는 동안 더 싼 방법을 찾게 되기도 하고, 이미 비슷한 걸 갖고 있다는 걸
+          떠올리기도 합니다. 금액이 클수록 오래 묵히도록 기본값을 잡아 두었습니다 —
+          5만원까지 3일, 30만원까지 일주일, 100만원까지 2주, 그 이상은 한 달입니다.
+        </p>
+        <p className="mut sm">
+          <b>"안 사고 넘긴 돈"은 통장에 생긴 돈이 아닙니다.</b> 안 썼을 뿐입니다.
+          그 돈을 실제로 남기려면 저축으로 옮겨 두세요.{" "}
+          <button className="linkbtn" onClick={() => setTab("save")}>저축 열기</button>
+        </p>
+      </section>
+
+      <Confirm open={!!del} name={del ? del.name : ""} kind="위시리스트 항목"
+        onCancel={() => setDel(null)}
+        onConfirm={() => { setWishes(wishes.filter((x) => x.id !== del.id)); setDel(null); }} />
     </>
   );
 }
@@ -4451,6 +4835,22 @@ export function Style() {
 .freefun{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
 .freefun>b{display:block;margin-bottom:5px;font-size:13.5px}
 .freefun p{margin:0 0 6px}
+
+/* 위시리스트 */
+.wish{border:1px solid var(--line2);border-radius:10px;padding:13px 15px;margin-bottom:9px;background:#FBFCFC}
+.wish.due{border-color:#DFCB94;background:var(--warnbg)}
+.wish.done{opacity:.8}
+.wish.done.dropped{border-left:3px solid var(--pos)}
+.wish.done.bought{border-left:3px solid var(--line)}
+.wish-h{display:flex;align-items:baseline;flex-wrap:wrap;gap:9px;margin-bottom:6px}
+.wish-h b{font-size:14.5px}
+.wish-h .mono{font-size:13.5px;color:var(--ink2)}
+.wish-ask{margin:8px 0 5px;font-size:13.5px;color:var(--ink2)}
+.wish-why{margin:0 0 4px;padding:9px 12px;border-left:3px solid var(--deep);
+  background:var(--card);font-size:13.5px;line-height:1.7;color:var(--ink2);white-space:pre-wrap}
+.waitrow{display:flex;flex-wrap:wrap;gap:6px}
+.linkbtn{font:inherit;font-size:inherit;padding:0;border:0;background:none;
+  color:var(--deep);text-decoration:underline;cursor:pointer}
 
 /* 아껴보기 */
 .tipgroup{margin-top:14px}
