@@ -2308,7 +2308,7 @@ function Dashboard({ plan, results, primary, chartData, unit, up, setTab }) {
               {floorNow > 0
                 ? <> 현재 안전선 {money(floorNow, unit)}은 약 <b>{months.toFixed(1)}개월치</b>입니다.
                     {low && " 수입이 끊기면 버티기 빠듯합니다."}</>
-                : <> 지금은 안전선이 0이라 잔고가 바닥나기 직전까지 \u2018여유 있음\u2019으로 나옵니다.</>}
+                : <> 지금은 안전선이 0이라 잔고가 바닥나기 직전까지 ‘여유 있음’이라고 나옵니다.</>}
             </div>
             <div className="row">
               <button className="btn sm" onClick={() => up((p) => { p.settings.floor = m3; })}>3개월치</button>
